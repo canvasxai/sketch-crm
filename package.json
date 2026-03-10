@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @crm/web dev",
+    "dev:server": "pnpm --filter @crm/server dev",
+    "dev:all": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "lint": "biome check .",
+    "format": "biome format . --write",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "typescript": "^5.9.3"
+  }
+}
