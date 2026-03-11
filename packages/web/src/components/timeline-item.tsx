@@ -6,7 +6,7 @@ import {
   CheckSquare,
   ArrowsLeftRight,
 } from "@phosphor-icons/react";
-import type { TimelineEntry, Email, LinkedinMessage, Meeting, Note, Task, StageChange } from "@crm/shared";
+import type { TimelineEntry, Email, LinkedinMessage, Meeting, Note, Task, OpportunityStageChange } from "@crm/shared";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -32,51 +32,49 @@ const typeConfig: Record<
   meeting: { icon: CalendarCheck, label: "Meeting" },
   note: { icon: NoteBlank, label: "Note" },
   task: { icon: CheckSquare, label: "Task" },
-  stage_change: { icon: ArrowsLeftRight, label: "Stage Change" },
+  opportunity_stage_change: { icon: ArrowsLeftRight, label: "Stage Change" },
 };
 
 interface TimelineItemProps {
   entry: TimelineEntry;
+  /** Contact's display name — used to show "You" vs first name on messages */
+  contactName?: string;
 }
 
-export function TimelineItem({ entry }: TimelineItemProps) {
+export function TimelineItem({ entry, contactName }: TimelineItemProps) {
   const config = typeConfig[entry.type];
   const Icon = config.icon;
 
   function renderContent() {
     switch (entry.type) {
       case "email": {
-        const email = entry.data as Email;
+        const rawEmail = entry.data as unknown as Record<string, unknown>;
+        const emailDirection = (rawEmail.direction ?? (entry.data as Email).direction) as string | undefined;
+        const emailSubject = (rawEmail.subject ?? (entry.data as Email).subject) as string | null;
+        const emailSender = emailDirection === "outbound"
+          ? "You"
+          : (contactName?.split(" ")[0] ?? "Them");
         return (
-          <>
-            <span className="text-sm text-muted-foreground mt-0.5">
-              {email.subject || "No subject"}
-            </span>
-            {email.direction && (
-              <div className="mt-1">
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
-                  {email.direction === "outbound" ? "Outbound" : "Inbound"}
-                </Badge>
-              </div>
-            )}
-          </>
+          <span className="text-sm text-muted-foreground mt-0.5">
+            {emailSender}: {emailSubject || "No subject"}
+          </span>
         );
       }
       case "linkedin_message": {
-        const msg = entry.data as LinkedinMessage;
+        // API returns snake_case fields from DB; access raw data for message_text
+        const rawMsg = entry.data as unknown as Record<string, unknown>;
+        const messageText = (rawMsg.message_text ?? rawMsg.messageText) as string | null;
+        const direction = rawMsg.direction as string | undefined;
+        const senderLabel = direction === "outbound"
+          ? "You"
+          : (contactName?.split(" ")[0] ?? "Them");
         return (
-          <>
-            <span className="text-sm text-muted-foreground mt-0.5">
-              {msg.messageText ? truncate(msg.messageText, 100) : "No message"}
-            </span>
-            {msg.direction && (
-              <div className="mt-1">
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
-                  {msg.direction === "outbound" ? "Outbound" : "Inbound"}
-                </Badge>
-              </div>
+          <div className="mt-0.5">
+            <span className="text-sm text-foreground">{senderLabel}</span>
+            {messageText && (
+              <p className="text-sm text-muted-foreground line-clamp-2">{messageText}</p>
             )}
-          </>
+          </div>
         );
       }
       case "meeting": {
@@ -109,11 +107,11 @@ export function TimelineItem({ entry }: TimelineItemProps) {
           </span>
         );
       }
-      case "stage_change": {
-        const sc = entry.data as StageChange;
+      case "opportunity_stage_change": {
+        const sc = entry.data as OpportunityStageChange;
         return (
           <span className="text-sm text-muted-foreground mt-0.5">
-            {sc.fromStage} → {sc.toStage}
+            {sc.fromStageLabel ?? "New"} → {sc.toStageLabel}
             {sc.changedByName && ` · by ${sc.changedByName}`}
           </span>
         );

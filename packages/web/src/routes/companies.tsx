@@ -1,22 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoute } from "@tanstack/react-router";
-import { FUNNEL_STAGES, type Company, type Contact, type FunnelStage } from "@crm/shared";
+import { COMPANY_PIPELINES, type Company, type Contact, type CompanyPipeline } from "@crm/shared";
 import {
   BuildingsIcon,
   PlusIcon,
   MagnifyingGlassIcon,
   SpinnerGapIcon,
-  Storefront,
-  SpinnerGap,
 } from "@phosphor-icons/react";
 
-import { useCompanies, useCreateCompany } from "@/hooks/use-companies";
+import { useCompanies, useCreateCompany, useUpdateCompany } from "@/hooks/use-companies";
 import { useContacts } from "@/hooks/use-contacts";
-import { useAddVendorDomain } from "@/hooks/use-settings";
 import { useUsers } from "@/hooks/use-users";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
-import { FunnelStageBadge } from "@/components/funnel-stage-badge";
+import { PipelineSelector } from "@/components/pipeline-selector";
 import { MultiFilterPopover } from "@/components/multi-filter-popover";
 import { ResizableDrawerWrapper } from "@/components/resizable-drawer-wrapper";
 import { CompanyDetailDrawer } from "@/components/company-detail-drawer";
@@ -41,9 +38,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getTopStage } from "@/lib/drawer-helpers";
 import { useCompaniesNextUp, useCompaniesLastTouched } from "@/hooks/use-insights";
 import { cn } from "@/lib/utils";
 import { dashboardRoute } from "./dashboard";
@@ -93,7 +88,6 @@ function CompaniesPage() {
 
   // ── Per-company contact data (stages, names, owners, products) ──
   type CompanyMeta = {
-    stages: FunnelStage[];
     names: string[];
     ownerIds: string[];
     hasCanvas: boolean;
@@ -106,14 +100,12 @@ function CompaniesPage() {
     for (const c of contactsData?.contacts ?? []) {
       if (c.companyId) {
         const existing = map.get(c.companyId) ?? {
-          stages: [],
           names: [],
           ownerIds: [],
           hasCanvas: false,
           hasSketch: false,
           hasServices: false,
         };
-        existing.stages.push(c.funnelStage);
         existing.names.push(c.name);
         if (c.createdByUserId && !existing.ownerIds.includes(c.createdByUserId)) {
           existing.ownerIds.push(c.createdByUserId);
@@ -132,10 +124,9 @@ function CompaniesPage() {
     return allCompanies.filter((company) => {
       const meta = companyContactsMap.get(company.id);
 
-      // Stage filter (any selected stage matches)
+      // Pipeline filter (any selected pipeline matches)
       if (stageFilters.size > 0) {
-        const topStage = meta ? getTopStage(meta.stages) : null;
-        if (!topStage || !stageFilters.has(topStage)) return false;
+        if (!stageFilters.has(company.pipeline)) return false;
       }
 
       // Product filter (any selected product matches)
@@ -250,19 +241,8 @@ function CompaniesPage() {
   const [source, setSource] = useState("");
 
   const createMutation = useCreateCompany();
-  const addVendorDomainMutation = useAddVendorDomain();
+  const updateCompanyMutation = useUpdateCompany();
   const canSubmit = name.trim().length > 0;
-
-  // ── Quick action state (inline table actions) ──
-  const [vendorConfirmDomain, setVendorConfirmDomain] = useState<string | null>(null);
-
-  function handleInlineVendorMark() {
-    if (!vendorConfirmDomain) return;
-    addVendorDomainMutation.mutate(
-      { domain: vendorConfirmDomain },
-      { onSuccess: () => setVendorConfirmDomain(null) },
-    );
-  }
 
   function resetAndClose() {
     setName("");
@@ -339,8 +319,8 @@ function CompaniesPage() {
         </div>
 
         <MultiFilterPopover
-          label="All stages"
-          options={FUNNEL_STAGES.map((s) => ({
+          label="All pipelines"
+          options={COMPANY_PIPELINES.map((s: CompanyPipeline) => ({
             value: s,
             label: s.charAt(0).toUpperCase() + s.slice(1),
           }))}
@@ -402,28 +382,17 @@ function CompaniesPage() {
           <div className="mt-4 rounded-lg border border-border bg-card">
             {/* Header row */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              <div className="w-5">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleSelectAll}
-                  className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                />
-              </div>
+              <div className="w-5" />
               <div className="flex-1 min-w-0">Name</div>
               <div className="w-32">Domain</div>
-              <div className="w-24">Top stage</div>
+              <div className="w-24">Pipeline</div>
               <div className="w-20">Owner</div>
               <div className="w-44">Next up</div>
               <div className="w-28">Last touched</div>
-              <div className="w-10"></div>
             </div>
 
             {/* Data rows */}
             {companies.map((company) => {
-              const isSelected = selected.has(company.id);
-              const companyContacts = companyContactsMap.get(company.id);
-              const topStage = companyContacts ? getTopStage(companyContacts.stages) : null;
               const ownerId = getCompanyOwner(company.id);
               const ownerName = ownerId ? userMap.get(ownerId) : null;
               const nextUp = nextUpData?.[company.id] ?? { type: "none" as const, label: "\u2014" };
@@ -432,31 +401,26 @@ function CompaniesPage() {
               return (
                 <div
                   key={company.id}
-                  className={cn(
-                    "group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-b-0 cursor-pointer",
-                    isSelected ? "bg-primary/5" : "hover:bg-muted/30",
-                  )}
+                  className="group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-b-0 cursor-pointer hover:bg-muted/30"
                 >
-                  <div className="w-5" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelect(company.id)}
-                      className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                    />
-                  </div>
+                  <div className="w-5" />
                   <div className="flex-1 min-w-0" onClick={() => openCompanyDrawer(company)}>
                     <div className="text-sm font-medium truncate">{company.name}</div>
                   </div>
                   <div className="w-32 text-xs text-muted-foreground truncate" onClick={() => openCompanyDrawer(company)}>
                     {company.domain ?? "\u2014"}
                   </div>
-                  <div className="w-24" onClick={() => openCompanyDrawer(company)}>
-                    {topStage ? (
-                      <FunnelStageBadge stage={topStage} />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">{"\u2014"}</span>
-                    )}
+                  <div className="w-24" onClick={(e) => e.stopPropagation()}>
+                    <PipelineSelector
+                      value={company.pipeline}
+                      options={COMPANY_PIPELINES}
+                      onChange={(p) => {
+                        updateCompanyMutation.mutate({
+                          id: company.id,
+                          data: { pipeline: (p ?? "uncategorized") as CompanyPipeline },
+                        });
+                      }}
+                    />
                   </div>
                   <div className="w-20 text-xs text-muted-foreground truncate" onClick={() => openCompanyDrawer(company)}>
                     {ownerName ?? "\u2014"}
@@ -478,24 +442,6 @@ function CompaniesPage() {
                   </div>
                   <div className="w-28 text-xs text-muted-foreground" onClick={() => openCompanyDrawer(company)}>
                     {lastTouched?.label ?? "\u2014"}
-                  </div>
-                  <div className="w-10 flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
-                    {company.domain && (
-                      <TooltipProvider delayDuration={300}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
-                              onClick={() => setVendorConfirmDomain(company.domain!)}
-                            >
-                              <Storefront size={14} />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">Mark {company.domain} as vendor</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                   </div>
                 </div>
               );
@@ -680,33 +626,6 @@ function CompaniesPage() {
         </SheetContent>
       </Sheet>
 
-      {/* ── Vendor Domain Confirmation (inline table action) ── */}
-      <Dialog open={!!vendorConfirmDomain} onOpenChange={(open) => { if (!open) setVendorConfirmDomain(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Mark as Vendor Domain</DialogTitle>
-            <DialogDescription>
-              Mark <strong>{vendorConfirmDomain}</strong> as a vendor domain? All contacts from this domain will be removed and
-              future emails will be filtered out.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVendorConfirmDomain(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" disabled={addVendorDomainMutation.isPending} onClick={handleInlineVendorMark}>
-              {addVendorDomainMutation.isPending ? (
-                <>
-                  <SpinnerGap size={14} className="animate-spin" />
-                  Marking...
-                </>
-              ) : (
-                "Mark as Vendor"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

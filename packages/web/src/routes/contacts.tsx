@@ -1,11 +1,13 @@
 import {
+  COMPANY_PIPELINES,
+  type CompanyPipeline,
+  CONTACT_PIPELINES,
   CONTACT_SOURCES,
   CONTACT_VISIBILITIES,
   type Contact,
   type ContactSource,
+  type ContactPipeline,
   type ContactVisibility,
-  FUNNEL_STAGES,
-  type FunnelStage,
   isPersonalEmailDomain,
 } from "@crm/shared";
 import {
@@ -25,6 +27,7 @@ import {
   Binoculars,
   FunnelSimple,
   LinkedinLogo,
+  ListChecks,
   MagnifyingGlass,
   NoteBlank,
   NotePencil,
@@ -33,7 +36,6 @@ import {
   Plus,
   SignIn,
   SlackLogo,
-  Sparkle,
   SpinnerGap,
   Storefront,
   Trash,
@@ -55,7 +57,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DOMPurify from "dompurify";
 import { EmptyState } from "@/components/empty-state";
-import { FunnelStageBadge } from "@/components/funnel-stage-badge";
+import { PipelineSelector } from "@/components/pipeline-selector";
+import { WorkflowStatusIcon } from "@/components/workflow-status-icon";
 import { MultiFilterPopover } from "@/components/multi-filter-popover";
 
 import { Badge } from "@/components/ui/badge";
@@ -85,7 +88,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { useCompanies } from "@/hooks/use-companies";
+import { useCompanies, useUpdateCompany } from "@/hooks/use-companies";
 import {
   useBatchDeleteContacts,
   useBatchUpdateContacts,
@@ -95,8 +98,10 @@ import {
   useDeleteContact,
   useUpdateContact,
 } from "@/hooks/use-contacts";
+import { ClassificationPopover } from "@/components/classification-popover";
 import { useCreateNote } from "@/hooks/use-notes";
-import { useAddVendorDomain } from "@/hooks/use-settings";
+import { useDedupContactIds } from "@/hooks/use-dedup-candidates";
+import { useAddMutedDomain } from "@/hooks/use-settings";
 import { useUsers } from "@/hooks/use-users";
 import { useTimeline } from "@/hooks/use-timeline";
 import { ResizableDrawerWrapper } from "@/components/resizable-drawer-wrapper";
@@ -105,7 +110,7 @@ import { useCreateMeeting, useCreateEmail } from "@/hooks/use-meetings";
 import { useContactsNextUp, useContactsLastTouched } from "@/hooks/use-insights";
 import { mapTimelineEntry } from "@/lib/timeline-mapper";
 import { timelineEventConfig } from "@/lib/drawer-event-config";
-import { formatRelativeDate, formatTime, groupByDate, drawerStageStyle, drawerSourceLabel, drawerChannelLabel } from "@/lib/drawer-helpers";
+import { formatRelativeDate, formatTime, groupByDate, drawerPipelineStyle, drawerSourceLabel, drawerChannelLabel } from "@/lib/drawer-helpers";
 import {
   type DrawerTimelineEventType,
   type DrawerTimelineEvent,
@@ -127,7 +132,7 @@ export const contactsRoute = createRoute({
   component: ContactsPage,
   validateSearch: (search: Record<string, unknown>) => ({
     search: (search.search as string) || "",
-    funnelStage: (search.funnelStage as string) || "",
+    pipeline: (search.pipeline as string) || "",
     visibility: (search.visibility as string) || "",
     ownerId: (search.ownerId as string) || "",
     page: Number(search.page) || 1,
@@ -167,10 +172,10 @@ function normalizeBody(text: string): string {
 
 function ContactsPage() {
   const navigate = useNavigate({ from: contactsRoute.fullPath });
-  const { search: searchParam, funnelStage, visibility, ownerId, page } = contactsRoute.useSearch();
+  const { search: searchParam, pipeline, visibility, ownerId, page } = contactsRoute.useSearch();
 
   // ── Multi-select filter state (hydrated from URL params) ──
-  const stageFilters = useMemo(() => parseMulti(funnelStage), [funnelStage]);
+  const stageFilters = useMemo(() => parseMulti(pipeline), [pipeline]);
   const visibilityFilters = useMemo(() => parseMulti(visibility), [visibility]);
   const ownerFilters = useMemo(() => parseMulti(ownerId), [ownerId]);
 
@@ -221,10 +226,11 @@ function ContactsPage() {
   // ── Client-side multi-select filtering ──
   const filteredContacts = useMemo(() => {
     return allContacts.filter((c) => {
-      if (stageFilters.size > 0 && !stageFilters.has(c.funnelStage)) return false;
+      if (stageFilters.size > 0 && !stageFilters.has(c.pipeline ?? "")) return false;
       if (visibilityFilters.size > 0 && !visibilityFilters.has(c.visibility)) return false;
       if (ownerFilters.size > 0) {
-        if (!c.createdByUserId || !ownerFilters.has(c.createdByUserId)) return false;
+        const ownerIds = (c.owners ?? []).map((o) => o.id);
+        if (ownerIds.length === 0 || !ownerIds.some((id) => ownerFilters.has(id))) return false;
       }
       return true;
     });
@@ -241,7 +247,12 @@ function ContactsPage() {
   const { data: nextUpData } = useContactsNextUp(contactIds);
   const { data: lastTouchedData } = useContactsLastTouched(contactIds);
 
-  // ── Selection state ──
+  // ── Dedup awareness ──
+  const { data: dedupContactIds } = useDedupContactIds();
+  const dedupIds = dedupContactIds ?? new Set<string>();
+
+  // ── Selection mode (toggleable) ──
+  const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -297,28 +308,44 @@ function ContactsPage() {
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [contactSource, setContactSource] = useState("");
-  const [contactFunnelStage, setContactFunnelStage] = useState("new");
+  const [contactPipeline, setContactPipeline] = useState<ContactPipeline | null>(null);
 
   const createMutation = useCreateContact();
   const updateContactMutation = useUpdateContact();
-  const addVendorDomainMutation = useAddVendorDomain();
+  const updateCompanyMutation = useUpdateCompany();
   const canSubmit = name.trim() && contactSource;
 
-  // ── Quick action state (inline table actions) ──
-  const [vendorConfirmDomain, setVendorConfirmDomain] = useState<string | null>(null);
+  // ── Pipeline propagation prompt ──
+  // When a user manually changes a contact's pipeline, ask whether to also update the company
+  const [pipelinePrompt, setPipelinePrompt] = useState<{
+    contactName: string;
+    companyId: string;
+    companyName: string;
+    companyCurrentPipeline: string;
+    newPipeline: string;
+  } | null>(null);
 
-  function handleInlineVendorMark() {
-    if (!vendorConfirmDomain) return;
-    addVendorDomainMutation.mutate(
-      { domain: vendorConfirmDomain },
-      { onSuccess: () => setVendorConfirmDomain(null) },
-    );
-  }
+  function handleContactPipelineChange(contact: Contact, newPipeline: string | null) {
+    // Always update the contact first
+    updateContactMutation.mutate({
+      id: contact.id,
+      data: { pipeline: newPipeline as ContactPipeline | null },
+    });
 
-  function handleVisibilityToggle(contact: Contact) {
-    const next: ContactVisibility =
-      contact.visibility === "shared" ? "private" : "shared";
-    updateContactMutation.mutate({ id: contact.id, data: { visibility: next } });
+    // If the contact has a company and a pipeline was selected (not cleared),
+    // ask whether to also update the company
+    if (newPipeline && contact.companyId) {
+      const company = companies.find((c) => c.id === contact.companyId);
+      if (company && company.pipeline !== newPipeline) {
+        setPipelinePrompt({
+          contactName: contact.name,
+          companyId: company.id,
+          companyName: company.name,
+          companyCurrentPipeline: company.pipeline,
+          newPipeline,
+        });
+      }
+    }
   }
 
   function resetAndClose() {
@@ -329,7 +356,7 @@ function ContactsPage() {
     setLinkedinUrl("");
     setCompanyId("");
     setContactSource("");
-    setContactFunnelStage("new");
+    setContactPipeline(null);
     setShowAddDialog(false);
   }
 
@@ -339,7 +366,7 @@ function ContactsPage() {
       {
         name: name.trim(),
         source: contactSource as ContactSource,
-        funnelStage: contactFunnelStage as FunnelStage,
+        pipeline: contactPipeline,
         ...(email && { email }),
         ...(phone && { phone }),
         ...(title && { title }),
@@ -359,7 +386,7 @@ function ContactsPage() {
   // ── Filter navigation helpers (multi-select) ──
   function setStageFilters(next: Set<string>) {
     navigate({
-      search: (prev) => ({ ...prev, funnelStage: serializeMulti(next), page: 1 }),
+      search: (prev) => ({ ...prev, pipeline: serializeMulti(next), page: 1 }),
       replace: true,
     });
   }
@@ -398,6 +425,7 @@ function ContactsPage() {
               )}
             </div>
           )}
+          <ClassificationPopover />
           <Button size="sm" onClick={() => setShowAddDialog(true)}>
             <Plus size={16} />
             Add Contact
@@ -418,8 +446,8 @@ function ContactsPage() {
         </div>
 
         <MultiFilterPopover
-          label="All stages"
-          options={FUNNEL_STAGES.map((s) => ({
+          label="All pipelines"
+          options={COMPANY_PIPELINES.map((s: CompanyPipeline) => ({
             value: s,
             label: s.charAt(0).toUpperCase() + s.slice(1),
           }))}
@@ -447,8 +475,21 @@ function ContactsPage() {
           onChange={setOwnerFiltersNav}
         />
 
-        {someSelected && (
-          <div className="ml-auto flex items-center gap-2">
+        <Button
+          size="sm"
+          variant={selectionMode ? "secondary" : "ghost"}
+          className="h-8 text-xs gap-1 ml-auto"
+          onClick={() => {
+            setSelectionMode((prev) => !prev);
+            setSelected(new Set());
+          }}
+        >
+          <ListChecks size={14} />
+          Select
+        </Button>
+
+        {selectionMode && someSelected && (
+          <div className="flex items-center gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -506,20 +547,21 @@ function ContactsPage() {
             {/* Table header */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               <div className="w-5">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleSelectAll}
-                  className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                />
+                {selectionMode && (
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    className="size-3.5 rounded border-border accent-primary cursor-pointer"
+                  />
+                )}
               </div>
               <div className="flex-1 min-w-0">Name</div>
               <div className="w-32">Domain</div>
-              <div className="w-24">Stage</div>
+              <div className="w-24">Pipeline</div>
               <div className="w-20">Owner</div>
               <div className="w-44">Next up</div>
               <div className="w-28">Last touched</div>
-              <div className="w-16"></div>
             </div>
 
             {/* Table rows */}
@@ -530,33 +572,33 @@ function ContactsPage() {
               const lastTouched = lastTouchedData?.[contact.id];
               const domain = contact.email?.split("@")[1] ?? null;
 
-              const VisIcon =
-                contact.visibility === "shared" ? Eye :
-                contact.visibility === "private" ? EyeSlash : Binoculars;
-              const visTooltip =
-                contact.visibility === "shared" ? "Shared — click to make private" :
-                contact.visibility === "private" ? "Private — click to share" :
-                "Unreviewed — click to share";
-              const visColor =
-                contact.visibility === "shared" ? "text-green-600 dark:text-green-400" :
-                contact.visibility === "private" ? "text-amber-600 dark:text-amber-400" :
-                "text-blue-600 dark:text-blue-400";
-
               return (
                 <div
                   key={contact.id}
                   className={cn(
                     "group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-b-0 cursor-pointer",
-                    isSelected ? "bg-primary/5" : "hover:bg-muted/30",
+                    selectionMode && isSelected ? "bg-primary/5" : "hover:bg-muted/30",
                   )}
                 >
                   <div className="w-5" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelect(contact.id)}
-                      className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                    />
+                    {selectionMode ? (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(contact.id)}
+                        className="size-3.5 rounded border-border accent-primary cursor-pointer"
+                      />
+                    ) : (
+                      <WorkflowStatusIcon
+                        contact={contact}
+                        dedupContactIds={dedupIds}
+                        onClick={(status) => {
+                          if (status === "dedup") {
+                            navigate({ to: "/dedup-review" });
+                          }
+                        }}
+                      />
+                    )}
                   </div>
                   <div className="flex-1 min-w-0" onClick={() => setDetailContact(contact)}>
                     <div className="text-sm font-medium truncate">{contact.name}</div>
@@ -565,11 +607,18 @@ function ContactsPage() {
                   <div className="w-32 text-xs text-muted-foreground truncate" onClick={() => setDetailContact(contact)}>
                     {domain ?? "\u2014"}
                   </div>
-                  <div className="w-24" onClick={() => setDetailContact(contact)}>
-                    <FunnelStageBadge stage={contact.funnelStage} />
+                  <div className="w-24" onClick={(e) => e.stopPropagation()}>
+                    <PipelineSelector
+                      value={contact.pipeline}
+                      options={CONTACT_PIPELINES}
+                      allowClear
+                      onChange={(p) => handleContactPipelineChange(contact, p)}
+                    />
                   </div>
                   <div className="w-20 text-xs text-muted-foreground truncate" onClick={() => setDetailContact(contact)}>
-                    {contact.createdByUserId ? (userMap.get(contact.createdByUserId) ?? "\u2014") : "\u2014"}
+                    {(contact.owners ?? []).length > 0
+                      ? contact.owners!.map((o) => o.name.split(" ")[0]).join(", ")
+                      : "\u2014"}
                   </div>
                   <div className="w-44 truncate" onClick={() => setDetailContact(contact)}>
                     {nextUp.type === "none" ? (
@@ -588,41 +637,6 @@ function ContactsPage() {
                   </div>
                   <div className="w-28 text-xs text-muted-foreground" onClick={() => setDetailContact(contact)}>
                     {lastTouched?.label ?? "\u2014"}
-                  </div>
-                  <div className="w-16 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                    <TooltipProvider delayDuration={300}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className={cn(
-                              "rounded p-1 transition-colors hover:bg-muted",
-                              visColor,
-                            )}
-                            onClick={() => handleVisibilityToggle(contact)}
-                          >
-                            <VisIcon size={14} />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="text-xs">{visTooltip}</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    {domain && contact.visibility === "unreviewed" && !isPersonalEmailDomain(domain) && (
-                      <TooltipProvider delayDuration={300}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
-                              onClick={() => setVendorConfirmDomain(domain)}
-                            >
-                              <Storefront size={14} />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs">Mark {domain} as vendor</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                   </div>
                 </div>
               );
@@ -685,6 +699,41 @@ function ContactsPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* ── Pipeline Propagation Prompt ── */}
+      <Dialog open={!!pipelinePrompt} onOpenChange={(open) => { if (!open) setPipelinePrompt(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Update company pipeline?</DialogTitle>
+            <DialogDescription>
+              You changed <strong>{pipelinePrompt?.contactName}</strong>'s pipeline.
+              Should <strong>{pipelinePrompt?.companyName}</strong> and all its contacts also be updated
+              to <strong>{pipelinePrompt?.newPipeline}</strong>?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPipelinePrompt(null)}>
+              No, keep as is
+            </Button>
+            <Button
+              onClick={() => {
+                if (pipelinePrompt) {
+                  updateCompanyMutation.mutate({
+                    id: pipelinePrompt.companyId,
+                    data: {
+                      pipeline: pipelinePrompt.newPipeline as CompanyPipeline,
+                      propagateToContacts: true,
+                    },
+                  });
+                }
+                setPipelinePrompt(null);
+              }}
+            >
+              Yes, update company &amp; contacts
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Add Contact Dialog ── */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
@@ -766,15 +815,16 @@ function ContactsPage() {
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label>Funnel Stage</Label>
-              <Select value={contactFunnelStage} onValueChange={setContactFunnelStage}>
+              <Label>Pipeline</Label>
+              <Select value={contactPipeline ?? ""} onValueChange={(v: string) => setContactPipeline(v === "" ? null : (v as ContactPipeline))}>
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select stage" />
+                  <SelectValue placeholder="Inherit from company" />
                 </SelectTrigger>
                 <SelectContent>
-                  {FUNNEL_STAGES.map((stage) => (
-                    <SelectItem key={stage} value={stage}>
-                      {stage.charAt(0).toUpperCase() + stage.slice(1)}
+                  <SelectItem value="">Inherit from company</SelectItem>
+                  {COMPANY_PIPELINES.map((p: CompanyPipeline) => (
+                    <SelectItem key={p} value={p}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -802,33 +852,6 @@ function ContactsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Vendor Domain Confirmation (inline table action) ── */}
-      <Dialog open={!!vendorConfirmDomain} onOpenChange={(open) => { if (!open) setVendorConfirmDomain(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Mark as Vendor Domain</DialogTitle>
-            <DialogDescription>
-              Mark <strong>{vendorConfirmDomain}</strong> as a vendor domain? All contacts from this domain will be removed and
-              future emails will be filtered out.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVendorConfirmDomain(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" disabled={addVendorDomainMutation.isPending} onClick={handleInlineVendorMark}>
-              {addVendorDomainMutation.isPending ? (
-                <>
-                  <SpinnerGap size={14} className="animate-spin" />
-                  Marking...
-                </>
-              ) : (
-                "Mark as Vendor"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -866,7 +889,7 @@ export function ContactDetailDrawer({
   const [editLinkedin, setEditLinkedin] = useState(contact.linkedinUrl ?? "");
 
   // Stage & channel
-  const [currentStage, setCurrentStage] = useState(contact.funnelStage || "new");
+  const [currentStage, setCurrentStage] = useState(contact.pipeline ?? "uncategorized");
   const leadChannel = (contact as Contact & { leadChannel?: LeadChannel | null }).leadChannel ?? null;
 
   // Tabs & view stack
@@ -913,7 +936,7 @@ export function ContactDetailDrawer({
   const prevContactId = useRef(contact.id);
   if (contact.id !== prevContactId.current) {
     prevContactId.current = contact.id;
-    setCurrentStage(contact.funnelStage || "new");
+    setCurrentStage(contact.pipeline ?? "uncategorized");
     setIsEditing(false);
     setEditName(contact.name);
     setEditTitle(contact.title ?? "");
@@ -937,8 +960,8 @@ export function ContactDetailDrawer({
   // Real timeline data
   const { data: timelineData } = useTimeline({ contactId: contact.id });
   const realTimeline = useMemo(
-    () => (timelineData?.timeline ?? []).map(mapTimelineEntry),
-    [timelineData],
+    () => (timelineData?.timeline ?? []).map((e) => mapTimelineEntry(e, contact.name)),
+    [timelineData, contact.name],
   );
 
   // Real tasks
@@ -952,7 +975,7 @@ export function ContactDetailDrawer({
   // Mutations
   const updateMutation = useUpdateContact();
   const deleteMutation = useDeleteContact();
-  const addVendorDomainMutation = useAddVendorDomain();
+  const addMutedDomainMutation = useAddMutedDomain();
   const createNoteMutation = useCreateNote();
   const createTaskMutation = useCreateTask();
   const updateTaskMutation = useUpdateTask();
@@ -989,11 +1012,11 @@ export function ContactDetailDrawer({
 
   // Handlers
 
-  function handleFunnelStageChange(value: string) {
-    setCurrentStage(value as FunnelStage);
+  function handlePipelineChange(value: string) {
+    setCurrentStage(value);
     updateMutation.mutate({
       id: contact.id,
-      data: { funnelStage: value as FunnelStage },
+      data: { pipeline: (value as ContactPipeline) || null },
     });
   }
 
@@ -1045,7 +1068,7 @@ export function ContactDetailDrawer({
 
   function handleMarkAsVendor() {
     if (!emailDomain) return;
-    addVendorDomainMutation.mutate(
+    addMutedDomainMutation.mutate(
       { domain: emailDomain },
       {
         onSuccess: () => {
@@ -1283,7 +1306,7 @@ export function ContactDetailDrawer({
                       {emailDomain && !isPersonalEmailDomain(emailDomain) && (
                         <DropdownMenuItem onClick={() => setShowVendorConfirm(true)}>
                           <Storefront size={14} className="mr-2" />
-                          Mark domain as vendor
+                          Mute domain
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuSeparator />
@@ -1302,7 +1325,7 @@ export function ContactDetailDrawer({
             </div>
           </div>
 
-          {/* Stage chip */}
+          {/* Pipeline chip */}
           {!isEditing && (
             <div className="mt-3">
               <DropdownMenu>
@@ -1311,21 +1334,21 @@ export function ContactDetailDrawer({
                     type="button"
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      drawerStageStyle((currentStage || "new") as FunnelStage),
+                      drawerPipelineStyle((currentStage || "uncategorized") as CompanyPipeline),
                     )}
                   >
-                    {(currentStage || "new").charAt(0).toUpperCase() + (currentStage || "new").slice(1)}
+                    {(currentStage || "uncategorized").charAt(0).toUpperCase() + (currentStage || "uncategorized").slice(1)}
                     <CaretDown size={10} />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="min-w-[120px]">
-                  {FUNNEL_STAGES.map((stage) => (
+                  {COMPANY_PIPELINES.map((p: CompanyPipeline) => (
                     <DropdownMenuItem
-                      key={stage}
-                      onClick={() => handleFunnelStageChange(stage)}
-                      className={currentStage === stage ? "bg-accent" : ""}
+                      key={p}
+                      onClick={() => handlePipelineChange(p)}
+                      className={currentStage === p ? "bg-accent" : ""}
                     >
-                      {stage.charAt(0).toUpperCase() + stage.slice(1)}
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -1540,25 +1563,11 @@ export function ContactDetailDrawer({
               {/* ── Context Tab ── */}
               {activeTab === "context" && (
                 <div className="px-6 py-4 space-y-4">
-                  {/* AI Recommended Next Action */}
-                  <div className="flex items-start gap-3 rounded-lg border border-dashed border-amber-300/60 bg-amber-50/50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-amber-950/20">
-                    <Sparkle size={16} className="mt-0.5 shrink-0 text-amber-500" weight="fill" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-amber-900 dark:text-amber-200">Recommended next action</p>
-                      <p className="mt-0.5 text-xs text-amber-800/70 dark:text-amber-300/70">
-                        Follow up on the proposal sent Mar 8 — Sarah hasn&apos;t replied in 3 days. Consider a short check-in email.
-                      </p>
-                    </div>
-                  </div>
-
                   {/* Person context */}
                   <div>
                     <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Person</p>
                     <div className="rounded-md bg-muted/40 px-3 py-2.5 space-y-2">
-                      <p className="text-xs text-foreground leading-relaxed">
-                        VP of Engineering at Acme Corp. Interested in enterprise plan with SSO. Previously met at SaaStr conference. Evaluating against competitor.
-                      </p>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 border-t border-border/50">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1">
                         <p className="text-[11px] text-muted-foreground">
                           <span className="font-medium">Ingested from:</span> {drawerSourceLabel(contact.source)}
                         </p>
@@ -1568,29 +1577,6 @@ export function ContactDetailDrawer({
                           </p>
                         )}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Company context */}
-                  {companyName && (
-                    <div>
-                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">{companyName}</p>
-                      <div className="rounded-md bg-muted/40 px-3 py-2.5">
-                        <p className="text-xs text-foreground leading-relaxed">
-                          Series B SaaS company, ~120 employees. Building developer tools. Currently using a competitor CRM. 3 contacts in pipeline.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* LinkedIn research (latest) */}
-                  <div>
-                    <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Latest LinkedIn Research</p>
-                    <div className="rounded-md bg-muted/40 px-3 py-2.5">
-                      <p className="text-xs text-foreground leading-relaxed">
-                        VP of Engineering at Acme Corp. 12+ years in SaaS infrastructure. Previously led platform team at Stripe. Active poster on engineering leadership topics.
-                      </p>
-                      <p className="mt-1.5 text-[10px] text-muted-foreground">Researched Mar 4, 2026 · $0.015</p>
                     </div>
                   </div>
                 </div>
@@ -1783,7 +1769,7 @@ export function ContactDetailDrawer({
                                     )}
                                     {!isBeingEdited && (
                                       <>
-                                        {event.type === "stage_change" && event.fromStage && event.toStage && (
+                                        {event.type === "opportunity_stage_change" && event.fromStage && event.toStage && (
                                           <p className="mt-0.5 text-xs text-muted-foreground">
                                             {event.fromStage} &rarr; {event.toStage}
                                             {event.changedBy && <span> &middot; by {event.changedBy}</span>}
@@ -1802,7 +1788,7 @@ export function ContactDetailDrawer({
                                             {event.direction === "outbound" ? "Outbound" : "Inbound"}
                                           </Badge>
                                         )}
-                                        {event.author && event.type !== "stage_change" && !isTask && (
+                                        {event.author && event.type !== "opportunity_stage_change" && !isTask && (
                                           <p className="mt-0.5 text-[11px] text-muted-foreground/70">
                                             by {event.author}
                                             {event.platform && <span> via {event.platform}</span>}
@@ -1962,9 +1948,9 @@ export function ContactDetailDrawer({
       <Dialog open={showVendorConfirm} onOpenChange={setShowVendorConfirm}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Mark as Vendor Domain</DialogTitle>
+            <DialogTitle>Mute Domain</DialogTitle>
             <DialogDescription>
-              Mark <strong>{emailDomain}</strong> as a vendor domain? All contacts from this domain will be removed and
+              Mute <strong>{emailDomain}</strong>? All contacts from this domain will be removed and
               future emails will be filtered out.
             </DialogDescription>
           </DialogHeader>
@@ -1972,14 +1958,14 @@ export function ContactDetailDrawer({
             <Button variant="outline" onClick={() => setShowVendorConfirm(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" disabled={addVendorDomainMutation.isPending} onClick={handleMarkAsVendor}>
-              {addVendorDomainMutation.isPending ? (
+            <Button variant="destructive" disabled={addMutedDomainMutation.isPending} onClick={handleMarkAsVendor}>
+              {addMutedDomainMutation.isPending ? (
                 <>
                   <SpinnerGap size={14} className="animate-spin" />
-                  Marking...
+                  Muting...
                 </>
               ) : (
-                "Mark as Vendor"
+                "Mute Domain"
               )}
             </Button>
           </DialogFooter>

@@ -18,6 +18,17 @@ const db = createDatabase(config);
 await runMigrations(db);
 logger.info("Database ready");
 
+// Reset any sync states stuck at "syncing" from a previous interrupted run
+try {
+  const { sql } = await import("kysely");
+  await sql`UPDATE aimfox_sync_state SET status = 'idle', error_message = 'Sync interrupted — server restarted' WHERE status = 'syncing'`.execute(db);
+  await sql`UPDATE gmail_sync_state SET status = 'idle', error_message = 'Sync interrupted — server restarted' WHERE status = 'syncing'`.execute(db);
+  await sql`UPDATE calendar_sync_state SET status = 'idle', error_message = 'Sync interrupted — server restarted' WHERE status = 'syncing'`.execute(db);
+  logger.info("Cleared any stuck sync states");
+} catch {
+  // Tables may not exist yet on first run — safe to ignore
+}
+
 const app = createApp(db, config);
 
 serve({ fetch: app.fetch, port: config.PORT }, (info) => {

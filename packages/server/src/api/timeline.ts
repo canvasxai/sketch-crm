@@ -4,19 +4,18 @@ import type { createLinkedinMessagesRepository } from "../db/repositories/linked
 import type { createMeetingsRepository } from "../db/repositories/meetings.js";
 import type { createNotesRepository } from "../db/repositories/notes.js";
 import type { createTasksRepository } from "../db/repositories/tasks.js";
-import type { createStageChangesRepository } from "../db/repositories/stage-changes.js";
 import type { createContactsRepository } from "../db/repositories/contacts.js";
+import { mapRow } from "../lib/map-row.js";
 
 type EmailsRepo = ReturnType<typeof createEmailsRepository>;
 type LinkedinMessagesRepo = ReturnType<typeof createLinkedinMessagesRepository>;
 type MeetingsRepo = ReturnType<typeof createMeetingsRepository>;
 type NotesRepo = ReturnType<typeof createNotesRepository>;
 type TasksRepo = ReturnType<typeof createTasksRepository>;
-type StageChangesRepo = ReturnType<typeof createStageChangesRepository>;
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 
 interface TimelineEntry {
-  type: "email" | "linkedin_message" | "meeting" | "note" | "task" | "stage_change";
+  type: "email" | "linkedin_message" | "meeting" | "note" | "task" | "opportunity_stage_change";
   data: Record<string, unknown>;
   date: string;
   contactName?: string;
@@ -28,7 +27,6 @@ interface TimelineDeps {
   meetings: MeetingsRepo;
   notes: NotesRepo;
   tasks: TasksRepo;
-  stageChanges: StageChangesRepo;
   contacts: ContactsRepo;
 }
 
@@ -60,7 +58,7 @@ export function timelineRoutes(repos: TimelineDeps) {
         if (mapped) {
           for (const t of mapped) allowedTypes.add(t);
         } else {
-          // Direct type name (e.g., "stage_change")
+          // Direct type name (e.g., "opportunity_stage_change")
           allowedTypes.add(filter.trim());
         }
       }
@@ -104,7 +102,7 @@ export function timelineRoutes(repos: TimelineDeps) {
             for (const email of emails) {
               timeline.push({
                 type: "email",
-                data: email as unknown as Record<string, unknown>,
+                data: mapRow(email as unknown as Record<string, unknown>),
                 date: email.sent_at,
                 ...(companyId || isGlobal ? { contactName: contactNameMap[cId] } : {}),
               });
@@ -123,7 +121,7 @@ export function timelineRoutes(repos: TimelineDeps) {
             for (const message of messages) {
               timeline.push({
                 type: "linkedin_message",
-                data: message as unknown as Record<string, unknown>,
+                data: mapRow(message as unknown as Record<string, unknown>),
                 date: message.sent_at,
                 ...(companyId || isGlobal ? { contactName: contactNameMap[cId] } : {}),
               });
@@ -142,7 +140,7 @@ export function timelineRoutes(repos: TimelineDeps) {
             for (const meeting of meetings) {
               timeline.push({
                 type: "meeting",
-                data: meeting as unknown as Record<string, unknown>,
+                data: mapRow(meeting as unknown as Record<string, unknown>),
                 date: meeting.start_time,
                 ...(companyId || isGlobal ? { contactName: contactNameMap[cId] } : {}),
               });
@@ -161,7 +159,7 @@ export function timelineRoutes(repos: TimelineDeps) {
             for (const note of notes) {
               timeline.push({
                 type: "note",
-                data: note as unknown as Record<string, unknown>,
+                data: mapRow(note as unknown as Record<string, unknown>),
                 date: note.created_at,
                 ...(companyId || isGlobal ? { contactName: contactNameMap[cId] } : {}),
               });
@@ -184,7 +182,7 @@ export function timelineRoutes(repos: TimelineDeps) {
               const cName = task.contact_id ? contactNameMap[task.contact_id] : undefined;
               timeline.push({
                 type: "task",
-                data: task as unknown as Record<string, unknown>,
+                data: mapRow(task as unknown as Record<string, unknown>),
                 date: task.created_at,
                 ...(cName ? { contactName: cName } : {}),
               });
@@ -195,38 +193,10 @@ export function timelineRoutes(repos: TimelineDeps) {
               for (const task of tasks) {
                 timeline.push({
                   type: "task",
-                  data: task as unknown as Record<string, unknown>,
+                  data: mapRow(task as unknown as Record<string, unknown>),
                   date: task.created_at,
                 });
               }
-            }
-          }
-        })(),
-      );
-    }
-
-    // Stage Changes
-    if (!allowedTypes || allowedTypes.has("stage_change")) {
-      fetchPromises.push(
-        (async () => {
-          if (contactIds.length === 1 && !isGlobal) {
-            const changes = await repos.stageChanges.list({ contactId: contactIds[0] });
-            for (const change of changes) {
-              timeline.push({
-                type: "stage_change",
-                data: change as unknown as Record<string, unknown>,
-                date: change.created_at,
-              });
-            }
-          } else {
-            const changes = await repos.stageChanges.listByContactIds(contactIds);
-            for (const change of changes) {
-              timeline.push({
-                type: "stage_change",
-                data: change as unknown as Record<string, unknown>,
-                date: change.created_at,
-                ...((companyId || isGlobal) ? { contactName: contactNameMap[change.contact_id] } : {}),
-              });
             }
           }
         })(),

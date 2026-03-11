@@ -7,19 +7,25 @@ import { SESSION_COOKIE } from "./auth.js";
 import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 import type { createUsersRepository } from "../db/repositories/users.js";
-import type { createStageChangesRepository } from "../db/repositories/stage-changes.js";
 import type { createDedupLogRepository } from "../db/repositories/dedup-log.js";
+import type { createDedupCandidatesRepository } from "../db/repositories/dedup-candidates.js";
+import type { createEmailsRepository } from "../db/repositories/emails.js";
+import type { createLinkedinMessagesRepository } from "../db/repositories/linkedin-messages.js";
 import {
   extractDomain,
   isPersonalEmailDomain,
   domainToCompanyName,
 } from "../lib/domains.js";
+import { computeMergeUpdate } from "../lib/dedup.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
 type UsersRepo = ReturnType<typeof createUsersRepository>;
-type StageChangesRepo = ReturnType<typeof createStageChangesRepository>;
 type DedupLogRepo = ReturnType<typeof createDedupLogRepository>;
+type DedupCandidatesRepo = ReturnType<typeof createDedupCandidatesRepository>;
+type EmailsRepo = ReturnType<typeof createEmailsRepository>;
+type LinkedinMessagesRepo = ReturnType<typeof createLinkedinMessagesRepository>;
 
 const leadChannelEnum = z.enum([
   "outbound_email", "outbound_linkedin", "instagram", "referral",
@@ -37,15 +43,6 @@ const contactPhoneEntrySchema = z.object({
   type: z.string(),
   isPrimary: z.boolean(),
 });
-
-const funnelStageEnum = z.enum([
-  "new",
-  "qualified",
-  "opportunity",
-  "customer",
-  "dormant",
-  "lost",
-]);
 
 const sourceEnum = z.enum([
   "linkedin",
@@ -67,7 +64,7 @@ const createSchema = z.object({
   linkedinUrl: z.string().url().optional(),
   companyId: z.string().optional(),
   source: sourceEnum,
-  funnelStage: funnelStageEnum.optional(),
+  pipeline: z.string().nullable().optional(),
   isCanvasUser: z.boolean().optional(),
   isSketchUser: z.boolean().optional(),
   usesServices: z.boolean().optional(),
@@ -87,7 +84,7 @@ const updateSchema = z.object({
   linkedinUrl: z.string().url().nullable().optional(),
   companyId: z.string().nullable().optional(),
   source: sourceEnum.optional(),
-  funnelStage: funnelStageEnum.optional(),
+  pipeline: z.string().nullable().optional(),
   isCanvasUser: z.boolean().optional(),
   isSketchUser: z.boolean().optional(),
   usesServices: z.boolean().optional(),
@@ -112,7 +109,7 @@ const bulkCreateSchema = z.object({
       title: z.string().optional(),
       linkedinUrl: z.string().optional(),
       companyId: z.string().optional(),
-      funnelStage: funnelStageEnum.optional(),
+      pipeline: z.string().nullable().optional(),
       isCanvasUser: z.boolean().optional(),
       isSketchUser: z.boolean().optional(),
       usesServices: z.boolean().optional(),
@@ -148,9 +145,11 @@ export function contactsRoutes(
   repo: ContactsRepo,
   companiesRepo: CompaniesRepo,
   users: UsersRepo,
-  stageChanges: StageChangesRepo,
   config: Config,
   dedupLog?: DedupLogRepo,
+  dedupCandidates?: DedupCandidatesRepo,
+  emails?: EmailsRepo,
+  linkedinMessages?: LinkedinMessagesRepo,
 ) {
   const routes = new Hono();
 
@@ -176,14 +175,7 @@ export function contactsRoutes(
     const currentUserId = await getCurrentUserId(c, config, users);
 
     const filters = {
-      funnelStage: c.req.query("funnelStage") as
-        | "new"
-        | "qualified"
-        | "opportunity"
-        | "customer"
-        | "dormant"
-        | "lost"
-        | undefined,
+      pipeline: c.req.query("pipeline"),
       source: c.req.query("source"),
       companyId: c.req.query("companyId"),
       ownerId: c.req.query("ownerId"),
@@ -208,7 +200,16 @@ export function contactsRoutes(
       repo.count(filters),
     ]);
 
-    return c.json({ contacts, total });
+    // Batch-fetch owners for all contacts in this page
+    const contactIds = contacts.map((ct) => ct.id);
+    const ownersByContact = await repo.getOwnersBatch(contactIds);
+
+    const contactsWithOwners = contacts.map((ct) => ({
+      ...mapRow(ct),
+      owners: ownersByContact[ct.id] ?? [],
+    }));
+
+    return c.json({ contacts: contactsWithOwners, total });
   });
 
   // Dedup/match endpoint
@@ -231,7 +232,7 @@ export function contactsRoutes(
     const result = await repo.findDuplicate(parsed.data);
 
     if (result) {
-      return c.json({ contact: result.contact, matchedOn: result.matchedOn });
+      return c.json({ contact: mapRow(result.contact), matchedOn: result.matchedOn });
     }
 
     return c.json({ contact: null, matchedOn: null });
@@ -362,7 +363,7 @@ export function contactsRoutes(
     }
 
     const owners = await repo.getOwners(id);
-    return c.json({ contact: { ...contact, owners } });
+    return c.json({ contact: { ...mapRow(contact), owners } });
   });
 
   // Create a contact with dedup check and optional auto-create company
@@ -397,7 +398,7 @@ export function contactsRoutes(
             code: "CONFLICT",
             message: `Duplicate contact found (matched on ${dup.matchedOn})`,
           },
-          existingContact: dup.contact,
+          existingContact: mapRow(dup.contact),
         },
         409,
       );
@@ -423,7 +424,7 @@ export function contactsRoutes(
       visibility: contactData.visibility ?? "shared",
     });
 
-    return c.json({ contact }, 201);
+    return c.json({ contact: mapRow(contact) }, 201);
   });
 
   // Update a contact
@@ -452,19 +453,8 @@ export function contactsRoutes(
       );
     }
 
-    // Auto-track stage changes
-    if (parsed.data.funnelStage && parsed.data.funnelStage !== existing.funnel_stage) {
-      const currentUserId = await getCurrentUserId(c, config, users);
-      await stageChanges.create({
-        contactId: id,
-        fromStage: existing.funnel_stage,
-        toStage: parsed.data.funnelStage,
-        changedBy: currentUserId ?? undefined,
-      });
-    }
-
     const contact = await repo.update(id, parsed.data);
-    return c.json({ contact });
+    return c.json({ contact: mapRow(contact) });
   });
 
   // Delete a contact
@@ -593,6 +583,175 @@ export function contactsRoutes(
         createdAt: l.created_at,
       })),
     });
+  });
+
+  // ── Dedup candidates endpoints ──
+
+  // GET /dedup-candidates/pending — list pending dedup candidates
+  routes.get("/dedup-candidates/pending", async (c) => {
+    if (!dedupCandidates) return c.json({ candidates: [] });
+    const rows = await dedupCandidates.listPending();
+    const candidates = rows.map((r) => ({
+      id: r.id,
+      matchReason: r.match_reason,
+      aiConfidence: r.ai_confidence,
+      status: r.status,
+      createdAt: r.created_at,
+      contactA: {
+        id: r.contact_a_id,
+        name: r.contact_a_name,
+        email: r.contact_a_email,
+        title: r.contact_a_title,
+        source: r.contact_a_source,
+        linkedinUrl: r.contact_a_linkedin_url,
+        aiSummary: r.contact_a_ai_summary,
+        companyName: r.contact_a_company_name,
+      },
+      contactB: {
+        id: r.contact_b_id,
+        name: r.contact_b_name,
+        email: r.contact_b_email,
+        title: r.contact_b_title,
+        source: r.contact_b_source,
+        linkedinUrl: r.contact_b_linkedin_url,
+        aiSummary: r.contact_b_ai_summary,
+        companyName: r.contact_b_company_name,
+      },
+    }));
+    return c.json({ candidates });
+  });
+
+  // GET /dedup-candidates/count — count pending dedup candidates (for sidebar badge)
+  routes.get("/dedup-candidates/count", async (c) => {
+    if (!dedupCandidates) return c.json({ count: 0 });
+    const count = await dedupCandidates.countPending();
+    return c.json({ count });
+  });
+
+  // GET /dedup-candidates/contact-ids — contact IDs with pending dedup candidates
+  routes.get("/dedup-candidates/contact-ids", async (c) => {
+    if (!dedupCandidates) return c.json({ contactIds: [] });
+    const contactIds = await dedupCandidates.contactIdsWithPending();
+    return c.json({ contactIds });
+  });
+
+  // POST /dedup-candidates/:id/dismiss — dismiss a dedup candidate
+  routes.post("/dedup-candidates/:id/dismiss", async (c) => {
+    if (!dedupCandidates) {
+      return c.json({ error: { code: "NOT_CONFIGURED", message: "Dedup candidates not configured" } }, 500);
+    }
+    const id = c.req.param("id");
+    try {
+      const candidate = await dedupCandidates.resolve(id, "dismissed");
+      return c.json({ candidate });
+    } catch {
+      return c.json({ error: { code: "NOT_FOUND", message: "Dedup candidate not found" } }, 404);
+    }
+  });
+
+  // ── Contact merge endpoint ──
+
+  // POST /merge — merge two contacts
+  routes.post("/merge", async (c) => {
+    const body = await c.req.json();
+    const { keepContactId, mergeContactId } = body;
+
+    if (!keepContactId || !mergeContactId) {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "keepContactId and mergeContactId are required" } },
+        400,
+      );
+    }
+
+    const keepContact = await repo.findById(keepContactId);
+    const mergeContact = await repo.findById(mergeContactId);
+
+    if (!keepContact || !mergeContact) {
+      return c.json(
+        { error: { code: "NOT_FOUND", message: "One or both contacts not found" } },
+        404,
+      );
+    }
+
+    // 1. Transfer related records to the kept contact
+    if (emails) {
+      const mergeEmails = await emails.list({ contactId: mergeContactId });
+      for (const email of mergeEmails) {
+        await emails.update(email.id, { contactId: keepContactId });
+      }
+    }
+
+    if (linkedinMessages) {
+      const mergeMessages = await linkedinMessages.list({ contactId: mergeContactId });
+      for (const msg of mergeMessages) {
+        await linkedinMessages.update(msg.id, { contactId: keepContactId });
+      }
+    }
+
+    // 2. Merge fields from mergeContact into keepContact (fill gaps only)
+    const mergeFields = computeMergeUpdate(
+      {
+        email: keepContact.email,
+        phone: keepContact.phone,
+        title: keepContact.title,
+        linkedin_url: keepContact.linkedin_url,
+        company_id: keepContact.company_id,
+        aimfox_lead_id: keepContact.aimfox_lead_id,
+        aimfox_profile_data: keepContact.aimfox_profile_data,
+        ai_summary: keepContact.ai_summary,
+      },
+      {
+        email: mergeContact.email,
+        phone: mergeContact.phone,
+        title: mergeContact.title,
+        linkedin_url: mergeContact.linkedin_url,
+        company_id: mergeContact.company_id,
+        aimfox_lead_id: mergeContact.aimfox_lead_id,
+        aimfox_profile_data: mergeContact.aimfox_profile_data,
+        ai_summary: mergeContact.ai_summary,
+      },
+    );
+
+    // Map snake_case DB fields to camelCase for the update method
+    const updateData: Record<string, unknown> = {};
+    if (mergeFields.email !== undefined) updateData.email = mergeFields.email;
+    if (mergeFields.phone !== undefined) updateData.phone = mergeFields.phone;
+    if (mergeFields.title !== undefined) updateData.title = mergeFields.title;
+    if (mergeFields.linkedin_url !== undefined) updateData.linkedinUrl = mergeFields.linkedin_url;
+    if (mergeFields.company_id !== undefined) updateData.companyId = mergeFields.company_id;
+    if (mergeFields.aimfox_lead_id !== undefined) updateData.aimfoxLeadId = mergeFields.aimfox_lead_id;
+    if (mergeFields.aimfox_profile_data !== undefined) updateData.aimfoxProfileData = mergeFields.aimfox_profile_data;
+
+    // 3. Append mergeContact's email to keepContact's emails array
+    if (mergeContact.email) {
+      await repo.appendEmail(keepContactId, {
+        email: mergeContact.email,
+        type: "work",
+        isPrimary: false,
+      });
+    }
+
+    // 4. Apply merged field updates
+    if (Object.keys(updateData).length > 0) {
+      await repo.update(keepContactId, updateData);
+    }
+
+    // 5. Transfer owners from merged contact to kept contact
+    const mergeOwners = await repo.getOwners(mergeContactId);
+    for (const owner of mergeOwners) {
+      await repo.addOwner(keepContactId, owner.id);
+    }
+
+    // 6. Resolve any dedup candidates involving the merged contact
+    if (dedupCandidates) {
+      await dedupCandidates.resolveByContactId(mergeContactId, "merged");
+    }
+
+    // 7. Delete the merged contact
+    await repo.remove(mergeContactId);
+
+    const updatedContact = await repo.findById(keepContactId);
+    return c.json({ contact: updatedContact ? mapRow(updatedContact) : null });
   });
 
   return routes;

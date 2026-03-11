@@ -35,6 +35,7 @@ export interface CompaniesTable {
   description: string | null;
   tech_stack: string | null;
   funding_stage: string | null;
+  pipeline: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring'
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -58,7 +59,7 @@ export interface ContactsTable {
   linkedin_url: string | null;
   company_id: string | null;
   source: string;
-  funnel_stage: Generated<string>;
+  pipeline: string | null; // override: 'hiring' etc. — null = inherit from company
   is_canvas_user: Generated<boolean>;
   is_sketch_user: Generated<boolean>;
   uses_services: Generated<boolean>;
@@ -70,8 +71,64 @@ export interface ContactsTable {
   phones: Generated<string>; // jsonb — ContactPhoneEntry[]
   aimfox_lead_id: string | null;
   aimfox_profile_data: unknown | null; // jsonb — rich LinkedIn profile data
+  ai_summary: string | null;
+  ai_classified_at: string | null;
+  ai_confidence: string | null;
+  needs_classification: Generated<boolean>;
   created_at: Generated<string>;
   updated_at: Generated<string>;
+}
+
+// ── Pipelines (configurable product pipelines: Services, Canvas, Sketch) ──
+
+export interface PipelinesTable {
+  id: Generated<string>;
+  name: string;
+  position: Generated<number>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+// ── Pipeline Stages (configurable stages within each pipeline) ──
+
+export interface PipelineStagesTable {
+  id: Generated<string>;
+  pipeline_id: string;
+  label: string;
+  stage_type: Generated<string>; // 'active' | 'won' | 'lost'
+  position: Generated<number>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+// ── Opportunities (deals linked to company + pipeline + stage) ──
+
+export interface OpportunitiesTable {
+  id: Generated<string>;
+  company_id: string | null;
+  contact_id: string | null;
+  pipeline_id: string;
+  stage_id: string;
+  title: string | null;
+  value: number | null;
+  value_period: string | null; // 'one_time' | 'monthly' | 'annual'
+  confidence: number | null;
+  close_date: string | null;
+  owner_id: string | null;
+  notes: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+// ── Opportunity Stage Changes (audit trail for stage transitions) ──
+
+export interface OpportunityStageChangesTable {
+  id: Generated<string>;
+  opportunity_id: string;
+  from_stage_id: string | null;
+  to_stage_id: string;
+  changed_by: string | null;
+  created_at: Generated<string>;
 }
 
 // ── Tasks ──
@@ -80,6 +137,7 @@ export interface TasksTable {
   id: Generated<string>;
   contact_id: string | null;
   company_id: string | null;
+  opportunity_id: string | null;
   title: string;
   assignee_id: string | null;
   due_date: string | null;
@@ -88,17 +146,6 @@ export interface TasksTable {
   created_by: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
-}
-
-// ── Stage Changes (audit trail for funnel_stage transitions) ──
-
-export interface StageChangesTable {
-  id: Generated<string>;
-  contact_id: string;
-  from_stage: string;
-  to_stage: string;
-  changed_by: string | null;
-  created_at: Generated<string>;
 }
 
 // ── Org Settings (key-value store for organization-wide config) ──
@@ -221,9 +268,9 @@ export interface CalendarSyncStateTable {
   updated_at: Generated<string>;
 }
 
-// ── Vendor Domains (blocked domains for email sync) ──
+// ── Muted Domains (blocked domains for email sync, formerly vendor_domains) ──
 
-export interface VendorDomainsTable {
+export interface MutedDomainsTable {
   id: Generated<string>;
   domain: string;
   source: Generated<string>; // "manual" | "ai"
@@ -272,6 +319,45 @@ export interface DedupLogTable {
   created_at: Generated<string>;
 }
 
+// ── Dedup Candidates (Tier 3 fuzzy match review queue) ──
+
+export interface DedupCandidatesTable {
+  id: Generated<string>;
+  contact_id_a: string;
+  contact_id_b: string;
+  match_reason: string;
+  ai_confidence: string | null;
+  status: Generated<string>; // 'pending' | 'merged' | 'dismissed'
+  created_at: Generated<string>;
+  resolved_at: string | null;
+}
+
+// ── Classification Runs (async classification job tracking) ──
+
+export interface ClassificationRunsTable {
+  id: Generated<string>;
+  status: Generated<string>; // 'running' | 'completed' | 'failed'
+  total_contacts: Generated<number>;
+  processed_contacts: Generated<number>;
+  pipeline_changes: Generated<number>;
+  errors: Generated<number>;
+  started_at: Generated<string>;
+  completed_at: string | null;
+}
+
+// ── Classification Logs (per-contact classification audit trail) ──
+
+export interface ClassificationLogsTable {
+  id: Generated<string>;
+  contact_id: string;
+  run_id: string;
+  pipeline_assigned: string | null;
+  previous_pipeline: string | null;
+  ai_summary: string | null;
+  confidence: string | null;
+  created_at: Generated<string>;
+}
+
 // ── DB root type ──
 
 export interface DB {
@@ -280,17 +366,23 @@ export interface DB {
   company_owners: CompanyOwnersTable;
   contacts: ContactsTable;
   contact_owners: ContactOwnersTable;
+  pipelines: PipelinesTable;
+  pipeline_stages: PipelineStagesTable;
+  opportunities: OpportunitiesTable;
+  opportunity_stage_changes: OpportunityStageChangesTable;
   emails: EmailsTable;
   linkedin_messages: LinkedinMessagesTable;
   meetings: MeetingsTable;
   notes: NotesTable;
   tasks: TasksTable;
-  stage_changes: StageChangesTable;
   gmail_sync_state: GmailSyncStateTable;
   calendar_sync_state: CalendarSyncStateTable;
   org_settings: OrgSettingsTable;
-  vendor_domains: VendorDomainsTable;
+  muted_domains: MutedDomainsTable;
   dedup_log: DedupLogTable;
   aimfox_sync_state: AimfoxSyncStateTable;
   aimfox_webhook_log: AimfoxWebhookLogTable;
+  dedup_candidates: DedupCandidatesTable;
+  classification_runs: ClassificationRunsTable;
+  classification_logs: ClassificationLogsTable;
 }

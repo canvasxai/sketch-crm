@@ -35,7 +35,7 @@ function ActivitiesPage() {
 
   // Map API entries → rich timeline events
   const allEvents = useMemo(
-    () => (data?.timeline ?? []).map(mapTimelineEntry),
+    () => (data?.timeline ?? []).map((e) => mapTimelineEntry(e)),
     [data],
   );
 
@@ -270,7 +270,7 @@ function ActivitiesPage() {
                           )}
 
                         {/* Stage change */}
-                        {event.type === "stage_change" &&
+                        {event.type === "opportunity_stage_change" &&
                           event.fromStage &&
                           event.toStage && (
                             <p className="mt-0.5 text-xs text-muted-foreground">

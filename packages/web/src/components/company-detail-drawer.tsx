@@ -14,7 +14,6 @@ import {
   PencilSimple,
   Plus,
   SpinnerGap,
-  Sparkle,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -131,7 +130,7 @@ export function CompanyDetailDrawer({ company, onClose, onOpenContact }: Company
   // Real timeline
   const { data: timelineData } = useTimeline({ companyId: company.id });
   const realTimeline = useMemo(
-    () => (timelineData?.timeline ?? []).map(mapTimelineEntry),
+    () => (timelineData?.timeline ?? []).map((e) => mapTimelineEntry(e)),
     [timelineData],
   );
 
@@ -564,17 +563,6 @@ export function CompanyDetailDrawer({ company, onClose, onOpenContact }: Company
           {/* ── Context Tab ── */}
           {activeTab === "context" && (
             <div className="px-6 py-4 space-y-4">
-              {/* AI Recommended Next Action */}
-              <div className="flex items-start gap-3 rounded-lg border border-dashed border-amber-300/60 bg-amber-50/50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-amber-950/20">
-                <Sparkle size={16} className="mt-0.5 shrink-0 text-amber-500" weight="fill" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-amber-900 dark:text-amber-200">Recommended next action</p>
-                  <p className="mt-0.5 text-xs text-amber-800/70 dark:text-amber-300/70">
-                    Follow up with Sarah Chen — no reply on the enterprise proposal in 3 days. Consider scheduling a call with CTO James Liu.
-                  </p>
-                </div>
-              </div>
-
               {/* Company Summary */}
               <div className="rounded-lg bg-muted/30 px-3 py-2.5 space-y-2">
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Company Info</p>
@@ -645,7 +633,7 @@ export function CompanyDetailDrawer({ company, onClose, onOpenContact }: Company
                           <p className="text-sm font-medium truncate">{contact.name}</p>
                           {contact.title && <p className="text-xs text-muted-foreground truncate">{contact.title}</p>}
                         </div>
-                        <FunnelStageBadge stage={contact.funnelStage} />
+                        <FunnelStageBadge pipeline={contact.pipeline ?? company.pipeline} />
                       </button>
                     ))}
                   </div>
@@ -765,7 +753,7 @@ export function CompanyDetailDrawer({ company, onClose, onOpenContact }: Company
                                 </div>
 
                                 {/* Event metadata */}
-                                {event.type === "stage_change" && event.fromStage && event.toStage && (
+                                {event.type === "opportunity_stage_change" && event.fromStage && event.toStage && (
                                   <p className="text-[11px] text-muted-foreground">
                                     {event.fromStage} → {event.toStage}{event.changedBy ? ` by ${event.changedBy}` : ""}
                                   </p>

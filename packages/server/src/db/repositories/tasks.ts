@@ -4,6 +4,7 @@ import type { DB } from "../schema.js";
 export interface TaskFilters {
   contactId?: string;
   companyId?: string;
+  opportunityId?: string;
   assigneeId?: string;
   completed?: boolean;
   limit?: number;
@@ -20,6 +21,7 @@ export function createTasksRepository(db: Kysely<DB>) {
           "tasks.id",
           "tasks.contact_id",
           "tasks.company_id",
+          "tasks.opportunity_id",
           "tasks.title",
           "tasks.assignee_id",
           "users.name as assignee_name",
@@ -37,6 +39,9 @@ export function createTasksRepository(db: Kysely<DB>) {
       }
       if (filters.companyId !== undefined) {
         query = query.where("tasks.company_id", "=", filters.companyId);
+      }
+      if (filters.opportunityId !== undefined) {
+        query = query.where("tasks.opportunity_id", "=", filters.opportunityId);
       }
       if (filters.assigneeId !== undefined) {
         query = query.where("tasks.assignee_id", "=", filters.assigneeId);
@@ -62,6 +67,7 @@ export function createTasksRepository(db: Kysely<DB>) {
           "tasks.id",
           "tasks.contact_id",
           "tasks.company_id",
+          "tasks.opportunity_id",
           "tasks.title",
           "tasks.assignee_id",
           "users.name as assignee_name",
@@ -79,6 +85,7 @@ export function createTasksRepository(db: Kysely<DB>) {
     async create(data: {
       contactId?: string;
       companyId?: string;
+      opportunityId?: string;
       title: string;
       assigneeId?: string;
       dueDate?: string;
@@ -89,6 +96,7 @@ export function createTasksRepository(db: Kysely<DB>) {
         .values({
           contact_id: data.contactId ?? null,
           company_id: data.companyId ?? null,
+          opportunity_id: data.opportunityId ?? null,
           title: data.title,
           assignee_id: data.assigneeId ?? null,
           due_date: data.dueDate ?? null,
@@ -110,6 +118,7 @@ export function createTasksRepository(db: Kysely<DB>) {
         completed: boolean;
         contactId: string | null;
         companyId: string | null;
+        opportunityId: string | null;
       }>,
     ) {
       const values: Record<string, unknown> = {};
@@ -118,6 +127,7 @@ export function createTasksRepository(db: Kysely<DB>) {
       if (data.dueDate !== undefined) values.due_date = data.dueDate;
       if (data.contactId !== undefined) values.contact_id = data.contactId;
       if (data.companyId !== undefined) values.company_id = data.companyId;
+      if (data.opportunityId !== undefined) values.opportunity_id = data.opportunityId;
       if (data.completed !== undefined) {
         values.completed = data.completed;
         values.completed_at = data.completed ? new Date().toISOString() : null;

@@ -1,6 +1,6 @@
-import type { FunnelStage } from "@crm/shared";
+import type { CompanyPipeline } from "@crm/shared";
 import type { DrawerTimelineEvent, LeadChannel } from "./drawer-types";
-import { STAGE_STYLES, leadChannelLabels, sourceLabels } from "./drawer-types";
+import { PIPELINE_STYLES, PIPELINE_LABELS, leadChannelLabels, sourceLabels } from "./drawer-types";
 
 // ── Time formatting ──
 
@@ -65,29 +65,14 @@ export function groupByDate(
   }));
 }
 
-// ── Stage priority (for "top stage" column) ──
-
-const STAGE_PRIORITY: Record<FunnelStage, number> = {
-  lost: 0,
-  dormant: 1,
-  new: 2,
-  qualified: 3,
-  opportunity: 4,
-  customer: 5,
-};
-
-/** Returns the highest-priority funnel stage from a list of stages. */
-export function getTopStage(stages: FunnelStage[]): FunnelStage | null {
-  if (stages.length === 0) return null;
-  return stages.reduce((best, stage) =>
-    (STAGE_PRIORITY[stage] ?? 0) > (STAGE_PRIORITY[best] ?? 0) ? stage : best,
-  );
-}
-
 // ── Label helpers ──
 
-export function drawerStageStyle(stage: FunnelStage): string {
-  return STAGE_STYLES[stage] ?? "bg-secondary text-secondary-foreground";
+export function drawerPipelineStyle(pipeline: CompanyPipeline): string {
+  return PIPELINE_STYLES[pipeline] ?? "bg-secondary text-secondary-foreground";
+}
+
+export function drawerPipelineLabel(pipeline: CompanyPipeline): string {
+  return PIPELINE_LABELS[pipeline] ?? pipeline;
 }
 
 export function drawerSourceLabel(source: string): string {

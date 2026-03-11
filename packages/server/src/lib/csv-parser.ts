@@ -30,6 +30,8 @@ export interface CsvColumnMapping {
   direction?: string | null;
   /** Contact source: "linkedin" | "gmail" | "manual" etc. */
   source?: string | null;
+  /** Owner name or email — resolved to user ID during import */
+  owner?: string | null;
 }
 
 /** A contact parsed from a CSV row. */
@@ -42,6 +44,8 @@ export interface ParsedContact {
   companyName: string | null;
   /** Per-row source override (e.g. "linkedin", "gmail"). Null = use request default. */
   source: string | null;
+  /** Owner name or email from CSV. Null = no owner specified. */
+  owner: string | null;
 }
 
 /** An activity (message) parsed from a CSV row, linked by contact index. */
@@ -109,6 +113,7 @@ export function mapCsvToContacts(
     const timestamp = getField(row, mapping.timestamp);
     const rawDirection = getField(row, mapping.direction);
     const source = getField(row, mapping.source);
+    const owner = getField(row, mapping.owner);
 
     // Resolve or create the contact
     let contactIdx: number;
@@ -125,13 +130,14 @@ export function mapCsvToContacts(
         linkedinUrl,
         companyName,
         source,
+        owner,
       });
     } else {
       // Skip rows that have neither email nor name -- cannot form a contact
       if (!email && !name) continue;
 
       contactIdx = contacts.length;
-      contacts.push({ name, email, phone, title, linkedinUrl, companyName, source });
+      contacts.push({ name, email, phone, title, linkedinUrl, companyName, source, owner });
 
       if (email) emailIndex.set(email, contactIdx);
       if (name) nameIndex.set(name.toLowerCase().trim(), contactIdx);
@@ -207,6 +213,8 @@ function mergeContact(
     existing.companyName = incoming.companyName;
   if (!existing.source && incoming.source)
     existing.source = incoming.source;
+  if (!existing.owner && incoming.owner)
+    existing.owner = incoming.owner;
 }
 
 /**

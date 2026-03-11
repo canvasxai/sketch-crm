@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createEmailsRepository } from "../db/repositories/emails.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type EmailsRepo = ReturnType<typeof createEmailsRepository>;
 
@@ -57,7 +58,7 @@ export function emailsRoutes(repo: EmailsRepo) {
     const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
 
     const emails = await repo.list({ contactId, limit, offset });
-    return c.json({ emails });
+    return c.json({ emails: mapRows(emails) });
   });
 
   // Get a single email
@@ -72,7 +73,7 @@ export function emailsRoutes(repo: EmailsRepo) {
       );
     }
 
-    return c.json({ email });
+    return c.json({ email: mapRow(email) });
   });
 
   // Create an email
@@ -93,7 +94,7 @@ export function emailsRoutes(repo: EmailsRepo) {
     }
 
     const email = await repo.create(parsed.data);
-    return c.json({ email }, 201);
+    return c.json({ email: mapRow(email) }, 201);
   });
 
   // Update an email
@@ -123,7 +124,7 @@ export function emailsRoutes(repo: EmailsRepo) {
     }
 
     const email = await repo.update(id, parsed.data);
-    return c.json({ email });
+    return c.json({ email: mapRow(email) });
   });
 
   // Delete an email

@@ -1,4 +1,4 @@
-import type { FunnelStage } from "@crm/shared";
+import type { CompanyPipeline } from "@crm/shared";
 
 // ── Timeline event types ──
 
@@ -11,7 +11,7 @@ export type DrawerTimelineEventType =
   | "internal_discussion"
   | "calendar_event"
   | "canvas_login"
-  | "stage_change"
+  | "opportunity_stage_change"
   | "note"
   | "task"
   | "contact_created";
@@ -147,13 +147,22 @@ export const sourceLabels: Record<string, string> = {
   gmail: "Gmail",
 };
 
-// ── Stage style map (for FunnelStage) ──
+// ── Pipeline style map (for CompanyPipeline) ──
 
-export const STAGE_STYLES: Record<FunnelStage, string> = {
-  new: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  qualified: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
-  opportunity: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  customer: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  dormant: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-  lost: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+export const PIPELINE_STYLES: Record<CompanyPipeline, string> = {
+  uncategorized: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+  sales: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  client: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  connected: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
+  muted: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
+  hiring: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+};
+
+export const PIPELINE_LABELS: Record<CompanyPipeline, string> = {
+  uncategorized: "Uncategorized",
+  sales: "Sales",
+  client: "Client",
+  connected: "Connected",
+  muted: "Muted",
+  hiring: "Hiring",
 };

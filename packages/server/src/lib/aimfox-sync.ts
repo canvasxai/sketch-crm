@@ -108,17 +108,37 @@ export async function processConnectionAccept(
   const title = richProfile?.current_experience?.[0]?.job_title ?? null;
 
   if (!contact) {
-    // Create new contact
+    // Tier 1: Try email match if we have an email
+    const contactEmail = target.email ?? richProfile?.emails?.[0]?.address ?? undefined;
+    if (contactEmail) {
+      const emailMatch = await deps.contacts.findDuplicate({ email: contactEmail });
+      if (emailMatch) contact = emailMatch.contact;
+    }
+
+    // Tier 2: Try name + company domain match
+    if (!contact && companyId) {
+      const company = await deps.companies.findById(companyId);
+      if (company?.domain) {
+        const tier2Match = await deps.contacts.findDuplicate({
+          name: contactName,
+          companyDomain: company.domain,
+        });
+        if (tier2Match) contact = tier2Match.contact;
+      }
+    }
+  }
+
+  if (!contact) {
+    // No match found — create new contact
     contact = await deps.contacts.create({
       name: contactName,
       email: target.email ?? richProfile?.emails?.[0]?.address ?? undefined,
       linkedinUrl,
       companyId: companyId ?? undefined,
       source: "linkedin",
-      funnelStage: "new",
       leadChannel: "outbound_linkedin",
       title: title ?? undefined,
-      visibility: "shared",
+      visibility: "unreviewed",
       aimfoxLeadId,
       aimfoxProfileData: richProfile ?? undefined,
     });
@@ -141,6 +161,8 @@ export async function processConnectionAccept(
 
     if (Object.keys(updates).length > 0) {
       contact = await deps.contacts.update(contact.id, updates);
+      // Flag for re-classification since new data was merged
+      await deps.contacts.setNeedsClassification([contact.id]);
     }
   }
 
@@ -224,9 +246,22 @@ export async function syncConversation(
  * Bulk backfill leads from AimFox into CRM.
  * Paginates through all leads, creates contacts/companies, optionally syncs conversations.
  */
+// Module-level AbortController so cancel endpoints can signal the running backfill
+let activeBackfillController: AbortController | null = null;
+
+/** Cancel any in-progress backfill. Returns true if one was running. */
+export function cancelAimfoxBackfill(): boolean {
+  if (activeBackfillController) {
+    activeBackfillController.abort();
+    activeBackfillController = null;
+    return true;
+  }
+  return false;
+}
+
 export async function backfillAimfoxLeads(
   deps: SyncDeps,
-  options?: { batchSize?: number; syncConversations?: boolean; maxLeads?: number },
+  options?: { batchSize?: number; syncConversations?: boolean; maxLeads?: number; ownerId?: string },
 ): Promise<{ processed: number; contactsCreated: number; companiesCreated: number }> {
   if (!deps.config.AIMFOX_API_KEY) {
     throw new Error("AIMFOX_API_KEY not configured");
@@ -235,6 +270,10 @@ export async function backfillAimfoxLeads(
   const client = new AimfoxClient(deps.config.AIMFOX_API_KEY, deps.config.AIMFOX_ACCOUNT_ID);
   const batchSize = options?.batchSize ?? 20;
   const maxLeads = options?.maxLeads ?? Infinity;
+
+  // Set up abort controller for cancellation
+  activeBackfillController = new AbortController();
+  const signal = activeBackfillController.signal;
 
   await deps.aimfoxSyncState.updateStatus("syncing");
 
@@ -247,11 +286,18 @@ export async function backfillAimfoxLeads(
 
   try {
     while (processed < maxLeads) {
+      // Check for cancellation at the start of each batch
+      if (signal.aborted) {
+        console.log(`[aimfox-backfill] Cancelled after ${processed} leads`);
+        break;
+      }
+
       const result = await client.searchLeads(cursor, batchSize);
       if (!result.leads || result.leads.length === 0) break;
 
       for (const lead of result.leads) {
         if (processed >= maxLeads) break;
+        if (signal.aborted) break;
 
         try {
           // Fetch rich profile
@@ -281,14 +327,17 @@ export async function backfillAimfoxLeads(
               linkedinUrl,
               companyId: companyId ?? undefined,
               source: "linkedin",
-              funnelStage: "new",
               leadChannel: "outbound_linkedin",
               title: richProfile.current_experience?.[0]?.job_title ?? undefined,
-              visibility: "shared",
+              visibility: "unreviewed",
               aimfoxLeadId: lead.id,
               aimfoxProfileData: richProfile,
             });
             contactsCreated++;
+            // Assign the triggering user as owner
+            if (options?.ownerId) {
+              await deps.contacts.addOwner(contact.id, options.ownerId);
+            }
           } else {
             // Update existing with profile data if missing
             if (!contact.aimfox_profile_data) {
@@ -296,6 +345,7 @@ export async function backfillAimfoxLeads(
                 aimfoxProfileData: richProfile,
                 aimfoxLeadId: lead.id,
               });
+              await deps.contacts.setNeedsClassification([contact.id]);
             }
           }
 
@@ -335,6 +385,8 @@ export async function backfillAimfoxLeads(
     const message = err instanceof Error ? err.message : "Unknown error";
     await deps.aimfoxSyncState.updateStatus("error", message);
     throw err;
+  } finally {
+    activeBackfillController = null;
   }
 
   console.log(

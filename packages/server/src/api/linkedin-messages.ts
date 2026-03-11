@@ -4,6 +4,7 @@ import type { createLinkedinMessagesRepository } from "../db/repositories/linked
 import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { Config } from "../config.js";
 import { AimfoxClient, sanitizeForAimfox } from "../lib/aimfox-client.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type LinkedinMessagesRepo = ReturnType<typeof createLinkedinMessagesRepository>;
 
@@ -58,7 +59,7 @@ export function linkedinMessagesRoutes(
     const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
 
     const messages = await repo.list({ contactId, limit, offset });
-    return c.json({ messages });
+    return c.json({ messages: mapRows(messages) });
   });
 
   // Get a single linkedin message
@@ -73,7 +74,7 @@ export function linkedinMessagesRoutes(
       );
     }
 
-    return c.json({ message });
+    return c.json({ message: mapRow(message) });
   });
 
   // Create a linkedin message
@@ -94,7 +95,7 @@ export function linkedinMessagesRoutes(
     }
 
     const message = await repo.create(parsed.data);
-    return c.json({ message }, 201);
+    return c.json({ message: mapRow(message) }, 201);
   });
 
   // Update a linkedin message
@@ -123,8 +124,8 @@ export function linkedinMessagesRoutes(
       );
     }
 
-    const message = await repo.update(id, parsed.data);
-    return c.json({ message });
+    const updated = await repo.update(id, parsed.data);
+    return c.json({ message: mapRow(updated) });
   });
 
   // Delete a linkedin message
@@ -192,7 +193,7 @@ export function linkedinMessagesRoutes(
       source: "aimfox",
     });
 
-    return c.json({ message, aimfoxResult: result }, 201);
+    return c.json({ message: mapRow(message), aimfoxResult: result }, 201);
   });
 
   return routes;

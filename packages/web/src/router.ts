@@ -5,6 +5,7 @@ import { companyDetailRoute } from "./routes/company-detail";
 import { contactDetailRoute } from "./routes/contact-detail";
 import { contactsRoute } from "./routes/contacts";
 import { dashboardRoute } from "./routes/dashboard";
+import { dedupReviewRoute } from "./routes/dedup-review";
 import { importRoute } from "./routes/import";
 import { integrationsRoute } from "./routes/integrations";
 import { loginRoute } from "./routes/login";
@@ -21,6 +22,7 @@ const routeTree = rootRoute.addChildren([
     companyDetailRoute,
     contactsRoute,
     contactDetailRoute,
+    dedupReviewRoute,
     activitiesRoute,
     importRoute,
     teamRoute,

@@ -19,10 +19,22 @@ import { useRef, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useUploadCsv } from "@/hooks/use-ingestion";
-import { useAimfoxBackfill, useGmailSync, useSourceStatus } from "@/hooks/use-integrations";
+import {
+  useAimfoxBackfill,
+  useCancelAimfoxBackfill,
+  useCancelGmailSync,
+  useGmailSync,
+  useSourceStatus,
+} from "@/hooks/use-integrations";
 import { cn } from "@/lib/utils";
 import { dashboardRoute } from "./dashboard";
 
@@ -65,6 +77,7 @@ const LINKEDIN_PAGE_OPTIONS = [
   { value: "1", label: "1 page (20 leads)" },
   { value: "5", label: "5 pages (100 leads)" },
   { value: "10", label: "10 pages (200 leads)" },
+  { value: "25", label: "25 pages (500 leads)" },
   { value: "all", label: "All leads" },
 ] as const;
 
@@ -107,11 +120,14 @@ function ImportsPage() {
   const { data: sourceStatus, isLoading: statusLoading } = useSourceStatus();
   const gmailSync = useGmailSync();
   const aimfoxBackfill = useAimfoxBackfill();
+  const cancelGmail = useCancelGmailSync();
+  const cancelAimfox = useCancelAimfoxBackfill();
 
+  const [gmailModalOpen, setGmailModalOpen] = useState(false);
   const [gmailPeriod, setGmailPeriod] = useState("3months");
-  const [calendarPeriod, setCalendarPeriod] = useState("3months");
+  const [linkedinModalOpen, setLinkedinModalOpen] = useState(false);
   const [linkedinPages, setLinkedinPages] = useState("all");
-  const [linkedinSyncConversations, setLinkedinSyncConversations] = useState(false);
+  const [calendarPeriod, setCalendarPeriod] = useState("3months");
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -141,25 +157,12 @@ function ImportsPage() {
                     <Skeleton className="mt-3 h-8 w-64" />
                   ) : (
                     <>
-                      <div className="mt-3 flex items-center gap-3 flex-wrap">
-                        <Select value={gmailPeriod} onValueChange={setGmailPeriod}>
-                          <SelectTrigger size="sm" className="h-8 w-[140px] text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PERIOD_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value} className="text-xs">
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-
+                      <div className="mt-3 flex items-center gap-2">
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-8 text-xs"
-                          onClick={() => gmailSync.mutate(gmailPeriod)}
+                          onClick={() => setGmailModalOpen(true)}
                           disabled={gmailSync.isPending || sourceStatus?.gmail.status === "syncing"}
                         >
                           {sourceStatus?.gmail.status === "syncing" || gmailSync.isPending ? (
@@ -174,6 +177,17 @@ function ImportsPage() {
                             </>
                           )}
                         </Button>
+                        {(sourceStatus?.gmail.status === "syncing" || gmailSync.isPending) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs text-destructive hover:text-destructive"
+                            onClick={() => cancelGmail.mutate()}
+                            disabled={cancelGmail.isPending}
+                          >
+                            Cancel
+                          </Button>
+                        )}
                       </div>
 
                       {/* Stats */}
@@ -197,6 +211,50 @@ function ImportsPage() {
                 </div>
               </div>
             </div>
+
+            {/* Gmail Import Modal */}
+            <Dialog open={gmailModalOpen} onOpenChange={setGmailModalOpen}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <div className="flex size-7 items-center justify-center rounded-md bg-red-500/10">
+                      <EnvelopeSimple size={14} className="text-red-500" />
+                    </div>
+                    Import Gmail
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="mt-2 space-y-4">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      How far back do you want to import?
+                    </label>
+                    <Select value={gmailPeriod} onValueChange={setGmailPeriod}>
+                      <SelectTrigger className="mt-1.5 h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PERIOD_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value} className="text-sm">
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    className="w-full"
+                    onClick={() => {
+                      gmailSync.mutate(gmailPeriod);
+                      setGmailModalOpen(false);
+                    }}
+                    disabled={gmailSync.isPending}
+                  >
+                    <ClockCounterClockwise size={14} />
+                    Start Import
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             {/* Calendar Backfill */}
             <div className="rounded-lg border border-border bg-card p-5 opacity-60">
@@ -251,40 +309,12 @@ function ImportsPage() {
                     <Skeleton className="mt-3 h-8 w-64" />
                   ) : (
                     <>
-                      <div className="mt-3 flex items-center gap-3 flex-wrap">
-                        <Select value={linkedinPages} onValueChange={setLinkedinPages}>
-                          <SelectTrigger size="sm" className="h-8 w-[170px] text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {LINKEDIN_PAGE_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value} className="text-xs">
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-
-                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={linkedinSyncConversations}
-                            onChange={(e) => setLinkedinSyncConversations(e.target.checked)}
-                            className="size-3.5 rounded border-border accent-primary"
-                          />
-                          Include conversations
-                        </label>
-
+                      <div className="mt-3 flex items-center gap-2">
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-8 text-xs"
-                          onClick={() =>
-                            aimfoxBackfill.mutate({
-                              maxLeads: linkedinPages === "all" ? undefined : Number(linkedinPages) * 20,
-                              syncConversations: linkedinSyncConversations || undefined,
-                            })
-                          }
+                          onClick={() => setLinkedinModalOpen(true)}
                           disabled={
                             aimfoxBackfill.isPending ||
                             sourceStatus?.linkedin.status === "syncing" ||
@@ -303,6 +333,17 @@ function ImportsPage() {
                             </>
                           )}
                         </Button>
+                        {(sourceStatus?.linkedin.status === "syncing" || aimfoxBackfill.isPending) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs text-destructive hover:text-destructive"
+                            onClick={() => cancelAimfox.mutate()}
+                            disabled={cancelAimfox.isPending}
+                          >
+                            Cancel
+                          </Button>
+                        )}
                       </div>
 
                       {/* Stats */}
@@ -326,6 +367,56 @@ function ImportsPage() {
                 </div>
               </div>
             </div>
+
+            {/* LinkedIn Import Modal */}
+            <Dialog open={linkedinModalOpen} onOpenChange={setLinkedinModalOpen}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <div className="flex size-7 items-center justify-center rounded-md bg-blue-600/10">
+                      <LinkedinLogo size={14} className="text-blue-600" />
+                    </div>
+                    Import LinkedIn
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="mt-2 space-y-4">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      How many leads do you want to import?
+                    </label>
+                    <Select value={linkedinPages} onValueChange={setLinkedinPages}>
+                      <SelectTrigger className="mt-1.5 h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LINKEDIN_PAGE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value} className="text-sm">
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Leads are imported alphabetically from your AIMFOX account. Each page contains 20 leads.
+                    </p>
+                  </div>
+                  <Button
+                    className="w-full"
+                    onClick={() => {
+                      aimfoxBackfill.mutate({
+                        maxLeads: linkedinPages === "all" ? undefined : Number(linkedinPages) * 20,
+                        syncConversations: true,
+                      });
+                      setLinkedinModalOpen(false);
+                    }}
+                    disabled={aimfoxBackfill.isPending}
+                  >
+                    <ClockCounterClockwise size={14} />
+                    Start Import
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             {/* Fireflies Placeholder */}
             <div className="rounded-lg border border-border bg-card p-5 opacity-60">

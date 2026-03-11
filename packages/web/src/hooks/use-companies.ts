@@ -39,9 +39,13 @@ export function useUpdateCompany() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Parameters<typeof api.companies.update>[1] }) =>
       api.companies.update(id, data),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       toast.success("Company updated");
       queryClient.invalidateQueries({ queryKey: ["companies"] });
+      // If we propagated pipeline changes to contacts, refresh contacts too
+      if (variables.data.propagateToContacts) {
+        queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      }
     },
   });
 }

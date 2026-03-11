@@ -5,13 +5,14 @@ import {
   PencilSimple,
   Trash,
   SpinnerGap,
+  Sparkle,
   EnvelopeSimple,
   Phone,
   LinkedinLogo,
   Plus,
   NoteBlank,
 } from "@phosphor-icons/react";
-import { FUNNEL_STAGES } from "@crm/shared";
+import { CONTACT_PIPELINES, type ContactPipeline, type CompanyPipeline } from "@crm/shared";
 
 import { useContact, useUpdateContact, useDeleteContact } from "@/hooks/use-contacts";
 import { useCompany } from "@/hooks/use-companies";
@@ -19,7 +20,8 @@ import { useTimeline } from "@/hooks/use-timeline";
 import { useCreateNote } from "@/hooks/use-notes";
 import { useUsers } from "@/hooks/use-users";
 import { useDedupLog, useReviewDedupLog } from "@/hooks/use-dedup-log";
-import { FunnelStageBadge } from "@/components/funnel-stage-badge";
+import { useClassificationHistory } from "@/hooks/use-classify";
+import { PipelineBadge } from "@/components/funnel-stage-badge";
 import { SourceBadge } from "@/components/source-badge";
 import { ProductFlags } from "@/components/product-flags";
 import { TimelineItem } from "@/components/timeline-item";
@@ -74,6 +76,8 @@ function ContactDetailPage() {
   const { data: dedupLogData } = useDedupLog(id);
   const unreviewedDedups = (dedupLogData?.logs ?? []).filter((l) => !l.reviewed);
 
+  const { data: classificationHistory } = useClassificationHistory(id);
+
   // ── Mutations ──
   const updateMutation = useUpdateContact();
   const deleteMutation = useDeleteContact();
@@ -99,7 +103,7 @@ function ContactDetailPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editLinkedinUrl, setEditLinkedinUrl] = useState("");
   const [editCompanyId, setEditCompanyId] = useState("");
-  const [editFunnelStage, setEditFunnelStage] = useState("");
+  const [editPipeline, setEditPipeline] = useState<ContactPipeline | "__inherit__">("__inherit__");
 
   function openEditSheet() {
     if (!contact) return;
@@ -109,7 +113,7 @@ function ContactDetailPage() {
     setEditTitle(contact.title ?? "");
     setEditLinkedinUrl(contact.linkedinUrl ?? "");
     setEditCompanyId(contact.companyId ?? "");
-    setEditFunnelStage(contact.funnelStage);
+    setEditPipeline(contact.pipeline ?? "__inherit__");
     setShowEditSheet(true);
   }
 
@@ -125,7 +129,7 @@ function ContactDetailPage() {
           title: editTitle || undefined,
           linkedinUrl: editLinkedinUrl || undefined,
           companyId: editCompanyId || undefined,
-          funnelStage: editFunnelStage as (typeof FUNNEL_STAGES)[number],
+          pipeline: (editPipeline === "__inherit__" ? null : editPipeline) as ContactPipeline | null,
         },
       },
       { onSuccess: () => setShowEditSheet(false) },
@@ -137,15 +141,7 @@ function ContactDetailPage() {
 
   function handleDelete() {
     deleteMutation.mutate(id, {
-      onSuccess: () => navigate({ to: "/contacts", search: { search: "", funnelStage: "", visibility: "", ownerId: "", page: 1 } }),
-    });
-  }
-
-  // ── Inline funnel stage change ──
-  function handleFunnelStageChange(value: string) {
-    updateMutation.mutate({
-      id,
-      data: { funnelStage: value as (typeof FUNNEL_STAGES)[number] },
+      onSuccess: () => navigate({ to: "/contacts", search: { search: "", pipeline: "", visibility: "", ownerId: "", page: 1 } }),
     });
   }
 
@@ -197,7 +193,7 @@ function ContactDetailPage() {
       {/* Back link */}
       <Link
         to="/contacts"
-        search={{ search: "", funnelStage: "", visibility: "", ownerId: "", page: 1 }}
+        search={{ search: "", pipeline: "", visibility: "", ownerId: "", page: 1 }}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
       >
         <ArrowLeft size={14} />
@@ -222,18 +218,9 @@ function ContactDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Select value={contact.funnelStage} onValueChange={handleFunnelStageChange}>
-            <SelectTrigger className="w-32 h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {FUNNEL_STAGES.map((stage) => (
-                <SelectItem key={stage} value={stage}>
-                  {stage.charAt(0).toUpperCase() + stage.slice(1)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {(contact.pipeline || company?.pipeline) && (
+            <PipelineBadge pipeline={(contact.pipeline ?? company?.pipeline)!} />
+          )}
           <Button variant="outline" size="sm" onClick={openEditSheet}>
             <PencilSimple size={14} />
             Edit
@@ -395,11 +382,53 @@ function ContactDetailPage() {
         ) : (
           <div className="divide-y divide-border">
             {timeline.map((entry, i) => (
-              <TimelineItem key={`${entry.type}-${entry.date}-${i}`} entry={entry} />
+              <TimelineItem key={`${entry.type}-${entry.date}-${i}`} entry={entry} contactName={contact?.name} />
             ))}
           </div>
         )}
       </div>
+
+      {/* Classification History */}
+      {classificationHistory && classificationHistory.length > 0 && (
+        <div className="mt-6">
+          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <Sparkle size={18} className="text-amber-500" />
+            Classification History
+          </h2>
+          <div className="space-y-2">
+            {classificationHistory.map((log) => (
+              <div key={log.id} className="rounded-lg border border-border bg-card p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs">
+                    <PipelineBadge pipeline={(log.previousPipeline ?? "uncategorized") as CompanyPipeline} />
+                    {log.pipelineAssigned !== log.previousPipeline && (
+                      <>
+                        <span className="text-muted-foreground">→</span>
+                        <PipelineBadge pipeline={(log.pipelineAssigned ?? "uncategorized") as CompanyPipeline} />
+                      </>
+                    )}
+                    {log.confidence && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-medium border-0">
+                        {log.confidence}
+                      </Badge>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">
+                    {new Date(log.createdAt).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </span>
+                </div>
+                {log.aiSummary && (
+                  <p className="text-xs text-muted-foreground leading-relaxed">{log.aiSummary}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Edit Sheet */}
       <Sheet open={showEditSheet} onOpenChange={setShowEditSheet}>
@@ -455,15 +484,16 @@ function ContactDetailPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label>Funnel Stage</Label>
-              <Select value={editFunnelStage} onValueChange={setEditFunnelStage}>
+              <Label>Pipeline</Label>
+              <Select value={editPipeline} onValueChange={(v: string) => setEditPipeline(v as ContactPipeline | "__inherit__")}>
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select stage" />
+                  <SelectValue placeholder="Inherit from company" />
                 </SelectTrigger>
                 <SelectContent>
-                  {FUNNEL_STAGES.map((stage) => (
-                    <SelectItem key={stage} value={stage}>
-                      {stage.charAt(0).toUpperCase() + stage.slice(1)}
+                  <SelectItem value="__inherit__">Inherit from company</SelectItem>
+                  {CONTACT_PIPELINES.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -9,13 +9,12 @@ import type { createEmailsRepository } from "../db/repositories/emails.js";
 import type { createGmailSyncStateRepository } from "../db/repositories/gmail-sync-state.js";
 import type { createOrgSettingsRepository } from "../db/repositories/org-settings.js";
 import type { createUsersRepository } from "../db/repositories/users.js";
-import type { createVendorDomainsRepository } from "../db/repositories/vendor-domains.js";
+import type { createMutedDomainsRepository } from "../db/repositories/muted-domains.js";
 import type { createLinkedinMessagesRepository } from "../db/repositories/linkedin-messages.js";
-import type { createDedupLogRepository } from "../db/repositories/dedup-log.js";
 import type { createAimfoxSyncStateRepository } from "../db/repositories/aimfox-sync-state.js";
 import type { createAimfoxWebhookLogRepository } from "../db/repositories/aimfox-webhook-log.js";
 import { syncGmailEmails } from "../lib/gmail-sync.js";
-import { syncConversation, backfillAimfoxLeads } from "../lib/aimfox-sync.js";
+import { syncConversation, backfillAimfoxLeads, cancelAimfoxBackfill } from "../lib/aimfox-sync.js";
 import { SESSION_COOKIE } from "./auth.js";
 
 interface IntegrationDeps {
@@ -27,8 +26,7 @@ interface IntegrationDeps {
   gmailSyncState: ReturnType<typeof createGmailSyncStateRepository>;
   calendarSyncState: ReturnType<typeof createCalendarSyncStateRepository>;
   orgSettings: ReturnType<typeof createOrgSettingsRepository>;
-  vendorDomains: ReturnType<typeof createVendorDomainsRepository>;
-  dedupLog: ReturnType<typeof createDedupLogRepository>;
+  mutedDomains: ReturnType<typeof createMutedDomainsRepository>;
   aimfoxSyncState: ReturnType<typeof createAimfoxSyncStateRepository>;
   aimfoxWebhookLog: ReturnType<typeof createAimfoxWebhookLogRepository>;
   config: Config;
@@ -375,6 +373,8 @@ export function integrationsRoutes(deps: IntegrationDeps) {
 
   // POST /aimfox/backfill — trigger bulk lead import
   routes.post("/aimfox/backfill", async (c) => {
+    const userEmail = await getUserEmail(c, deps.config);
+    const user = userEmail ? await deps.users.findByEmail(userEmail) : null;
     const body = await c.req.json<{ batchSize?: number; syncConversations?: boolean; maxLeads?: number }>().catch(() => ({ batchSize: undefined, syncConversations: undefined, maxLeads: undefined }));
 
     const result = await backfillAimfoxLeads(
@@ -390,10 +390,40 @@ export function integrationsRoutes(deps: IntegrationDeps) {
         batchSize: body.batchSize,
         syncConversations: body.syncConversations,
         maxLeads: body.maxLeads,
+        ownerId: user?.id,
       },
     );
 
     return c.json({ result });
+  });
+
+  // POST /aimfox/cancel — cancel a running LinkedIn/AimFox backfill
+  routes.post("/aimfox/cancel", async (c) => {
+    const wasRunning = cancelAimfoxBackfill();
+    if (wasRunning) {
+      await deps.aimfoxSyncState.updateStatus("idle", "Import cancelled by user");
+    } else {
+      // Even if no backfill was running in-process, reset stuck state
+      const state = await deps.aimfoxSyncState.get();
+      if (state?.status === "syncing") {
+        await deps.aimfoxSyncState.updateStatus("idle", "Import cancelled by user");
+      }
+    }
+    return c.json({ success: true, wasRunning });
+  });
+
+  // POST /gmail/cancel — cancel/reset a stuck Gmail sync
+  routes.post("/gmail/cancel", async (c) => {
+    const userEmail = await getUserEmail(c, deps.config);
+    if (!userEmail) return c.json({ error: { code: "UNAUTHORIZED", message: "Not authenticated" } }, 401);
+    const user = await deps.users.findByEmail(userEmail);
+    if (!user) return c.json({ error: { code: "NOT_FOUND", message: "User not found" } }, 404);
+
+    const state = await deps.gmailSyncState.findByUser(user.id);
+    if (state?.status === "syncing") {
+      await deps.gmailSyncState.updateStatus(user.id, "idle", "Import cancelled by user");
+    }
+    return c.json({ success: true });
   });
 
   // GET /aimfox/accounts — list LinkedIn accounts from AimFox

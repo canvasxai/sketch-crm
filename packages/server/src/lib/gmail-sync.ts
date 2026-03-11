@@ -3,17 +3,14 @@
  * creates contacts/companies, and stores emails in the database.
  */
 
-import type AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
 import type { Config } from "../config.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 import type { createContactsRepository } from "../db/repositories/contacts.js";
-import type { createDedupLogRepository } from "../db/repositories/dedup-log.js";
 import type { createEmailsRepository } from "../db/repositories/emails.js";
 import type { createGmailSyncStateRepository } from "../db/repositories/gmail-sync-state.js";
 import type { createOrgSettingsRepository } from "../db/repositories/org-settings.js";
 import type { createUsersRepository } from "../db/repositories/users.js";
-import type { createVendorDomainsRepository } from "../db/repositories/vendor-domains.js";
-import { checkNameDedup, classifyPersonalEmail } from "./ai-dedup.js";
+import type { createMutedDomainsRepository } from "../db/repositories/muted-domains.js";
 import { domainToCompanyName, extractDomain, isPersonalEmailDomain } from "./domains.js";
 import { GmailClient, extractAllParticipants, extractBody, getHeader, parseEmailAddress } from "./gmail.js";
 
@@ -31,8 +28,7 @@ interface SyncDeps {
   emails: ReturnType<typeof createEmailsRepository>;
   gmailSyncState: ReturnType<typeof createGmailSyncStateRepository>;
   orgSettings: ReturnType<typeof createOrgSettingsRepository>;
-  vendorDomains: ReturnType<typeof createVendorDomainsRepository>;
-  dedupLog: ReturnType<typeof createDedupLogRepository>;
+  mutedDomains: ReturnType<typeof createMutedDomainsRepository>;
 }
 
 export interface SyncResult {
@@ -40,8 +36,6 @@ export interface SyncResult {
   contactsCreated: number;
   companiesCreated: number;
   ownersAssigned: number;
-  dedupMerges: number;
-  personalEmailsClassified: number;
   errors: string[];
 }
 
@@ -186,8 +180,6 @@ export async function syncGmailEmails(
     contactsCreated: 0,
     companiesCreated: 0,
     ownersAssigned: 0,
-    dedupMerges: 0,
-    personalEmailsClassified: 0,
     errors: [],
   };
 
@@ -211,17 +203,6 @@ export async function syncGmailEmails(
   const profile = await client.getProfile();
   const userEmail = profile.emailAddress.toLowerCase();
 
-  // Create Bedrock client for AI dedup/classification (if credentials configured)
-  let anthropic: AnthropicBedrock | null = null;
-  if (config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY) {
-    const { default: AnthropicBedrockClient } = await import("@anthropic-ai/bedrock-sdk");
-    anthropic = new AnthropicBedrockClient({
-      awsAccessKey: config.AWS_ACCESS_KEY_ID,
-      awsSecretKey: config.AWS_SECRET_ACCESS_KEY,
-      awsRegion: config.AWS_REGION ?? "us-east-1",
-    });
-  }
-
   // Mark sync as in progress
   await deps.gmailSyncState.upsert(userId, {
     status: "syncing",
@@ -231,7 +212,7 @@ export async function syncGmailEmails(
   try {
     // Load domain filters
     const internalDomains = await deps.orgSettings.getInternalDomains();
-    const vendorDomains = await deps.vendorDomains.getDomainList();
+    const mutedDomains = await deps.mutedDomains.getDomainList();
 
     const query = buildDateQuery(syncPeriod);
     let pageToken: string | undefined;
@@ -256,7 +237,7 @@ export async function syncGmailEmails(
         }
 
         try {
-          await processMessage(message, userEmail, userId, internalDomains, vendorDomains, deps, result, anthropic);
+          await processMessage(message, userEmail, userId, internalDomains, mutedDomains, deps, result);
         } catch (err) {
           result.errors.push(`Message ${message.id}: ${err instanceof Error ? err.message : "Unknown error"}`);
         }
@@ -299,31 +280,29 @@ function isInternalDomain(email: string, internalDomains: string[]): boolean {
 }
 
 /**
- * Checks if an email address belongs to a vendor/promotional domain.
+ * Checks if an email address belongs to a muted/promotional domain.
  */
-function isVendorDomain(email: string, vendorDomains: string[]): boolean {
-  if (vendorDomains.length === 0) return false;
+function isMutedDomain(email: string, mutedDomains: string[]): boolean {
+  if (mutedDomains.length === 0) return false;
   const domain = extractDomain(email);
-  return domain ? vendorDomains.includes(domain.toLowerCase()) : false;
+  return domain ? mutedDomains.includes(domain.toLowerCase()) : false;
 }
 
 /**
  * Processes a single Gmail message — creates contacts, companies, and email record.
  * Skips emails where ALL participants are from internal domains.
- * New contacts from Gmail sync are created with visibility: "unreviewed" and funnel_stage: "new".
+ * New contacts from Gmail sync are created with visibility: "unreviewed".
  * Auto-assigns owners: any internal-domain participant becomes owner of contacts + companies.
- * AI dedup: if a new email doesn't match but the name is similar, uses Haiku to detect same person.
- * AI classification: for personal domain emails, classifies as prospect and extracts company info.
+ * Dedup: exact email match only — same email = same person.
  */
 async function processMessage(
   message: Awaited<ReturnType<GmailClient["getMessage"]>>,
   userEmail: string,
   syncingUserId: string,
   internalDomains: string[],
-  vendorDomains: string[],
+  mutedDomains: string[],
   deps: SyncDeps,
   result: SyncResult,
-  anthropic: AnthropicBedrock | null,
 ): Promise<void> {
   // Skip Gmail promotional emails
   if (message.labelIds?.includes("CATEGORY_PROMOTIONS")) return;
@@ -338,8 +317,8 @@ async function processMessage(
   const fromEmail = from ? parseEmailAddress(from) : null;
   if (!fromEmail) return;
 
-  // Skip emails from vendor/promotional domains
-  if (isVendorDomain(fromEmail, vendorDomains)) return;
+  // Skip emails from muted/promotional domains
+  if (isMutedDomain(fromEmail, mutedDomains)) return;
 
   // Determine direction
   const direction = fromEmail === userEmail ? "outbound" : "inbound";
@@ -399,107 +378,51 @@ async function processMessage(
         });
       }
     } else {
-      // No exact email match — try AI name-based dedup before creating new contact
+      // No email match — try Tier 2 (name + company domain) before creating
       const name = extractDisplayName(participantEmail, allParticipants, message);
-      let mergedViaAi = false;
+      let companyId: string | null = null;
+      const domain = extractDomain(participantEmail);
 
-      if (anthropic && name) {
-        try {
-          const candidates = await deps.contacts.findByNameSimilarity(name, participantEmail, 5);
-          if (candidates.length > 0) {
-            const dedupResult = await checkNameDedup(
-              anthropic,
-              name,
-              participantEmail,
-              candidates.map((c) => ({ name: c.name, email: c.email, id: c.id })),
-            );
-
-            if (dedupResult.match && dedupResult.matchedIndex !== null) {
-              const matchedContact = candidates[dedupResult.matchedIndex];
-              if (matchedContact) {
-                contactId = matchedContact.id;
-                mergedViaAi = true;
-
-                // Append the new email to the matched contact
-                await deps.contacts.appendEmail(matchedContact.id, {
-                  email: participantEmail,
-                  type: "work",
-                  isPrimary: false,
-                });
-
-                // Log the dedup event for frontend review
-                await deps.dedupLog.create({
-                  contactId: matchedContact.id,
-                  mergedEmail: participantEmail,
-                  mergedName: name,
-                  matchReason: "ai_name_similarity",
-                  aiConfidence: `${dedupResult.confidence}: ${dedupResult.reason}`,
-                });
-
-                result.dedupMerges++;
-              }
-            }
-          }
-        } catch (err) {
-          result.errors.push(
-            `AI dedup error for ${participantEmail}: ${err instanceof Error ? err.message : "unknown"}`,
-          );
+      if (domain && !isPersonalEmailDomain(domain)) {
+        // Business domain — auto-create company
+        const company = await deps.companies.findOrCreateByDomain(domain, {
+          name: domainToCompanyName(domain),
+          source: "email_domain",
+        });
+        companyId = company.id;
+        const timeDiff = Date.now() - new Date(company.created_at).getTime();
+        if (timeDiff < 5000) {
+          result.companiesCreated++;
         }
       }
 
-      if (!mergedViaAi) {
-        // Create new contact + company
-        let companyId: string | null = null;
-        const domain = extractDomain(participantEmail);
+      // Tier 2: Try name + company domain match
+      const tier2Match = domain
+        ? await deps.contacts.findDuplicate({ name, companyDomain: domain })
+        : null;
 
-        if (domain && !isPersonalEmailDomain(domain)) {
-          // Business domain — auto-create company
-          const company = await deps.companies.findOrCreateByDomain(domain, {
-            name: domainToCompanyName(domain),
-            source: "email_domain",
-          });
-          companyId = company.id;
-          const timeDiff = Date.now() - new Date(company.created_at).getTime();
-          if (timeDiff < 5000) {
-            result.companiesCreated++;
-          }
-        } else if (domain && isPersonalEmailDomain(domain) && anthropic) {
-          // Personal domain — use AI to classify and extract company info
-          try {
-            const classification = await classifyPersonalEmail(
-              anthropic,
-              name,
-              participantEmail,
-              subject ?? "",
-              body.slice(0, 500),
-            );
-            result.personalEmailsClassified++;
-
-            if (classification.isProspect && classification.companyDomain) {
-              const company = await deps.companies.findOrCreateByDomain(
-                classification.companyDomain,
-                {
-                  name: classification.companyName ?? domainToCompanyName(classification.companyDomain),
-                  source: "email_domain",
-                },
-              );
-              companyId = company.id;
-              const timeDiff = Date.now() - new Date(company.created_at).getTime();
-              if (timeDiff < 5000) {
-                result.companiesCreated++;
-              }
-            }
-            // If not a prospect or no company info, contact exists without company (allowed)
-          } catch {
-            // AI classification is best-effort — silently continue
-          }
+      if (tier2Match) {
+        contactId = tier2Match.contact.id;
+        // Merge: append this email and fill missing fields
+        await deps.contacts.appendEmail(contactId, {
+          email: participantEmail,
+          type: "work",
+          isPrimary: false,
+        });
+        if (!tier2Match.contact.email) {
+          await deps.contacts.update(contactId, { email: participantEmail });
         }
-
+        if (!tier2Match.contact.company_id && companyId) {
+          await deps.contacts.update(contactId, { companyId });
+        }
+        // Flag for re-classification since new data was merged
+        await deps.contacts.setNeedsClassification([contactId]);
+      } else {
+        // No match — create new contact
         const contact = await deps.contacts.create({
           name,
           email: participantEmail,
           source: "gmail",
-          funnelStage: "new",
           companyId: companyId ?? undefined,
           visibility: "unreviewed",
           createdByUserId: syncingUserId,
@@ -569,6 +492,8 @@ async function processMessage(
 
   if (created) {
     result.emailsSynced++;
+    // New email data — flag contact for re-classification
+    await deps.contacts.setNeedsClassification([primaryContactId]);
   }
 }
 

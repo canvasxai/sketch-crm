@@ -4,6 +4,7 @@ import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 import type { createLinkedinMessagesRepository } from "../db/repositories/linkedin-messages.js";
 import type { createEmailsRepository } from "../db/repositories/emails.js";
+import type { createUsersRepository } from "../db/repositories/users.js";
 import {
   parseCsv,
   mapCsvToContacts,
@@ -19,6 +20,7 @@ type ContactsRepo = ReturnType<typeof createContactsRepository>;
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
 type LinkedinMessagesRepo = ReturnType<typeof createLinkedinMessagesRepository>;
 type EmailsRepo = ReturnType<typeof createEmailsRepository>;
+type UsersRepo = ReturnType<typeof createUsersRepository>;
 
 const sourceEnum = z.enum([
   "linkedin",
@@ -43,6 +45,7 @@ const columnMappingSchema = z
     timestamp: z.string().nullable().optional(),
     direction: z.string().nullable().optional(),
     source: z.string().nullable().optional(),
+    owner: z.string().nullable().optional(),
   })
   .optional();
 
@@ -51,6 +54,7 @@ interface IngestionDeps {
   companies: CompaniesRepo;
   linkedinMessages?: LinkedinMessagesRepo;
   emails?: EmailsRepo;
+  users?: UsersRepo;
 }
 
 export function ingestionRoutes(repos: IngestionDeps) {
@@ -182,6 +186,17 @@ export function ingestionRoutes(repos: IngestionDeps) {
     let activitiesCreated = 0;
     const errors: Array<{ row: number; message: string }> = [];
 
+    // Build user lookup map for owner assignment from CSV
+    let usersByName: Map<string, string> | null = null;
+    if (repos.users) {
+      const allUsers = await repos.users.list();
+      usersByName = new Map<string, string>();
+      for (const u of allUsers) {
+        usersByName.set(u.name.toLowerCase(), u.id);
+        usersByName.set(u.email.toLowerCase(), u.id);
+      }
+    }
+
     // Track contact IDs by index for activity creation
     const contactIdByIndex = new Map<number, string>();
 
@@ -221,11 +236,22 @@ export function ingestionRoutes(repos: IngestionDeps) {
           }
         }
 
-        // Check for duplicate contact
-        const dup = await repos.contacts.findDuplicate({
+        // Check for duplicate contact (Tier 1 + Tier 2)
+        let dup = await repos.contacts.findDuplicate({
           email: parsed.email ?? undefined,
           linkedinUrl: parsed.linkedinUrl ?? undefined,
         });
+
+        // Tier 2: name + company domain match
+        if (!dup && parsed.name && parsed.email) {
+          const domain = extractDomain(parsed.email);
+          if (domain && !isPersonalEmailDomain(domain)) {
+            dup = await repos.contacts.findDuplicate({
+              name: parsed.name,
+              companyDomain: domain,
+            });
+          }
+        }
 
         if (dup) {
           // Merge missing fields
@@ -243,6 +269,7 @@ export function ingestionRoutes(repos: IngestionDeps) {
 
           if (Object.keys(updateData).length > 0) {
             await repos.contacts.update(dup.contact.id, updateData);
+            await repos.contacts.setNeedsClassification([dup.contact.id]);
             contactsUpdated++;
           } else {
             contactsSkipped++;
@@ -265,6 +292,14 @@ export function ingestionRoutes(repos: IngestionDeps) {
           });
           contactsCreated++;
           contactIdByIndex.set(i, newContact.id);
+
+          // Assign owner from CSV if present
+          if (parsed.owner && usersByName) {
+            const ownerId = usersByName.get(parsed.owner.toLowerCase());
+            if (ownerId) {
+              await repos.contacts.addOwner(newContact.id, ownerId);
+            }
+          }
         } else {
           contactsSkipped++;
         }
@@ -340,6 +375,7 @@ function autoDetectMapping(
     timestamp: /^(date|timestamp|sent\s*at|sent\s*date|time|datetime)$/i,
     direction: /^(direction|type|in\/?out|sent\s*or\s*received)$/i,
     source: /^(source|origin|lead[\s_]*source|contact[\s_]*source)$/i,
+    owner: /^(owner|assigned[\s_]*to|rep|sales[\s_]*rep)$/i,
   };
 
   for (const [field, pattern] of Object.entries(patterns)) {

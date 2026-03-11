@@ -1,8 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
+import type { createContactsRepository } from "../db/repositories/contacts.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
+type ContactsRepo = ReturnType<typeof createContactsRepository>;
+
+const pipelineEnum = z.enum(["uncategorized", "sales", "client", "connected", "muted", "hiring"]);
 
 const createSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -16,6 +21,7 @@ const createSchema = z.object({
   description: z.string().optional(),
   techStack: z.string().optional(),
   fundingStage: z.string().optional(),
+  pipeline: pipelineEnum.optional(),
 });
 
 const updateSchema = z.object({
@@ -30,23 +36,27 @@ const updateSchema = z.object({
   description: z.string().nullable().optional(),
   techStack: z.string().nullable().optional(),
   fundingStage: z.string().nullable().optional(),
+  pipeline: pipelineEnum.optional(),
+  /** When true and pipeline is changing, also update all contacts of this company */
+  propagateToContacts: z.boolean().optional(),
 });
 
-export function companiesRoutes(repo: CompaniesRepo) {
+export function companiesRoutes(repo: CompaniesRepo, contacts?: ContactsRepo) {
   const routes = new Hono();
 
-  // List companies with search, pagination
+  // List companies with search, pipeline filter, pagination
   routes.get("/", async (c) => {
     const search = c.req.query("search");
+    const pipeline = c.req.query("pipeline");
     const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
     const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
 
     const [companies, total] = await Promise.all([
-      repo.list({ search, limit, offset }),
+      repo.list({ search, pipeline, limit, offset }),
       repo.count({ search }),
     ]);
 
-    return c.json({ companies, total });
+    return c.json({ companies: mapRows(companies), total });
   });
 
   // Match company by domain
@@ -66,7 +76,7 @@ export function companiesRoutes(repo: CompaniesRepo) {
     }
 
     const company = await repo.findByDomain(domain);
-    return c.json({ company: company ?? null });
+    return c.json({ company: company ? mapRow(company) : null });
   });
 
   // Get a single company with owners
@@ -82,7 +92,7 @@ export function companiesRoutes(repo: CompaniesRepo) {
     }
 
     const owners = await repo.getOwners(id);
-    return c.json({ company: { ...company, owners } });
+    return c.json({ company: { ...mapRow(company), owners } });
   });
 
   // Create a company
@@ -104,7 +114,7 @@ export function companiesRoutes(repo: CompaniesRepo) {
 
     try {
       const company = await repo.create(parsed.data);
-      return c.json({ company }, 201);
+      return c.json({ company: mapRow(company) }, 201);
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes("duplicate key")) {
         return c.json(
@@ -147,8 +157,19 @@ export function companiesRoutes(repo: CompaniesRepo) {
       );
     }
 
-    const company = await repo.update(id, parsed.data);
-    return c.json({ company });
+    // Extract propagateToContacts before passing to repo (it's not a company column)
+    const { propagateToContacts, ...companyData } = parsed.data;
+
+    const company = await repo.update(id, companyData);
+
+    // Propagate pipeline to all contacts of this company
+    let contactsUpdated = 0;
+    if (propagateToContacts && companyData.pipeline && contacts) {
+      contactsUpdated = await contacts.updatePipelineByCompanyId(id, companyData.pipeline);
+      console.log(`[companies] Propagated pipeline "${companyData.pipeline}" to ${contactsUpdated} contacts of company ${id}`);
+    }
+
+    return c.json({ company: mapRow(company), contactsUpdated });
   });
 
   // Delete a company

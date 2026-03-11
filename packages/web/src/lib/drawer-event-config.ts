@@ -26,7 +26,7 @@ export const timelineEventConfig: Record<
   internal_discussion: { icon: ChatCircleDots, label: "Internal", color: "bg-amber-100 text-amber-600" },
   calendar_event: { icon: CalendarCheck, label: "Calendar", color: "bg-green-100 text-green-600" },
   canvas_login: { icon: SignIn, label: "Canvas Login", color: "bg-emerald-100 text-emerald-600" },
-  stage_change: { icon: ArrowsClockwise, label: "Stage Change", color: "bg-orange-100 text-orange-600" },
+  opportunity_stage_change: { icon: ArrowsClockwise, label: "Stage Change", color: "bg-orange-100 text-orange-600" },
   note: { icon: NoteBlank, label: "Note", color: "bg-gray-100 text-gray-600" },
   task: { icon: CheckSquare, label: "Task", color: "bg-indigo-100 text-indigo-600" },
   contact_created: { icon: Plus, label: "Created", color: "bg-teal-100 text-teal-600" },

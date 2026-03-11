@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createOrgSettingsRepository } from "../db/repositories/org-settings.js";
-import type { createVendorDomainsRepository } from "../db/repositories/vendor-domains.js";
+import type { createMutedDomainsRepository } from "../db/repositories/muted-domains.js";
 import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 
 type OrgSettingsRepo = ReturnType<typeof createOrgSettingsRepository>;
-type VendorDomainsRepo = ReturnType<typeof createVendorDomainsRepository>;
+type MutedDomainsRepo = ReturnType<typeof createMutedDomainsRepository>;
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
 
@@ -14,14 +14,14 @@ const domainsSchema = z.object({
   domains: z.array(z.string().min(1)).max(100),
 });
 
-const addVendorDomainSchema = z.object({
+const addMutedDomainSchema = z.object({
   domain: z.string().min(1),
   source: z.enum(["manual", "ai"]).default("manual"),
 });
 
 export function settingsRoutes(
   orgSettings: OrgSettingsRepo,
-  vendorDomains: VendorDomainsRepo,
+  mutedDomains: MutedDomainsRepo,
   contacts?: ContactsRepo,
   companies?: CompaniesRepo,
 ) {
@@ -55,7 +55,7 @@ export function settingsRoutes(
     // Retroactively clean up contacts & companies from internal domains
     let purged = { contactsRemoved: 0, companiesRemoved: 0 };
     for (const domain of parsed.data.domains) {
-      const domainPurge = await vendorDomains.purgeByDomain(domain);
+      const domainPurge = await mutedDomains.purgeByDomain(domain);
       purged.contactsRemoved += domainPurge.contactsRemoved;
       purged.companiesRemoved += domainPurge.companiesRemoved;
     }
@@ -63,16 +63,16 @@ export function settingsRoutes(
     return c.json({ domains, purged });
   });
 
-  // GET /vendor-domains — returns all vendor domains with metadata
-  routes.get("/vendor-domains", async (c) => {
-    const domains = await vendorDomains.list();
+  // GET /muted-domains — returns all muted domains with metadata
+  routes.get("/muted-domains", async (c) => {
+    const domains = await mutedDomains.list();
     return c.json({ domains });
   });
 
-  // POST /vendor-domains — add a single vendor domain
-  routes.post("/vendor-domains", async (c) => {
+  // POST /muted-domains — add a single muted domain
+  routes.post("/muted-domains", async (c) => {
     const body = await c.req.json();
-    const parsed = addVendorDomainSchema.safeParse(body);
+    const parsed = addMutedDomainSchema.safeParse(body);
 
     if (!parsed.success) {
       return c.json(
@@ -86,21 +86,21 @@ export function settingsRoutes(
       );
     }
 
-    const domain = await vendorDomains.add(parsed.data.domain, parsed.data.source);
+    const domain = await mutedDomains.add(parsed.data.domain, parsed.data.source);
     if (!domain) {
       return c.json({ error: { code: "DUPLICATE", message: "Domain already exists" } }, 409);
     }
 
     // Retroactively remove contacts & companies from this domain
-    const purged = await vendorDomains.purgeByDomain(parsed.data.domain);
+    const purged = await mutedDomains.purgeByDomain(parsed.data.domain);
 
     return c.json({ domain, purged }, 201);
   });
 
-  // DELETE /vendor-domains/:id — remove a vendor domain by ID
-  routes.delete("/vendor-domains/:id", async (c) => {
+  // DELETE /muted-domains/:id — remove a muted domain by ID
+  routes.delete("/muted-domains/:id", async (c) => {
     const id = c.req.param("id");
-    const deleted = await vendorDomains.remove(id);
+    const deleted = await mutedDomains.remove(id);
 
     if (!deleted) {
       return c.json({ error: { code: "NOT_FOUND", message: "Domain not found" } }, 404);

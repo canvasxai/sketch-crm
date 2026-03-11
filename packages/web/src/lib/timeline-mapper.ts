@@ -5,15 +5,18 @@ import type {
   Meeting,
   Note,
   Task,
-  StageChange,
+  OpportunityStageChange,
 } from "@crm/shared";
 import type { DrawerTimelineEvent, DrawerTimelineEventType } from "./drawer-types";
 
 /**
  * Map an API TimelineEntry to the richer DrawerTimelineEvent format
  * used by the company/contact detail drawers.
+ *
+ * @param contactName — optional name of the contact; used to render
+ *   "You" / first-name prefixes on emails and LinkedIn messages.
  */
-export function mapTimelineEntry(entry: TimelineEntry): DrawerTimelineEvent {
+export function mapTimelineEntry(entry: TimelineEntry, contactName?: string): DrawerTimelineEvent {
   const base = {
     id: (entry.data as { id: string }).id,
     date: entry.date,
@@ -23,25 +26,35 @@ export function mapTimelineEntry(entry: TimelineEntry): DrawerTimelineEvent {
   switch (entry.type) {
     case "email": {
       const email = entry.data as Email;
+      const rawEmail = entry.data as unknown as Record<string, unknown>;
       // body_html arrives snake_case from the API (no camelCase transform)
-      const rawHtml = (entry.data as unknown as Record<string, unknown>).body_html as string | null;
+      const rawHtml = rawEmail.body_html as string | null;
+      const emailDir = (rawEmail.direction ?? email.direction) as "inbound" | "outbound" | undefined;
+      const emailSender = emailDir === "outbound"
+        ? "You"
+        : (contactName ?? entry.contactName ?? "").split(" ")[0] || "Them";
       return {
         ...base,
         type: "email" as DrawerTimelineEventType,
-        title: email.subject || "No subject",
+        title: `${emailSender}: ${email.subject || "No subject"}`,
         description: email.body ?? undefined,
         descriptionHtml: rawHtml ?? undefined,
-        direction: email.direction as "inbound" | "outbound" | undefined,
+        // No direction badge — sender name in the title conveys it
       };
     }
     case "linkedin_message": {
-      const msg = entry.data as LinkedinMessage;
+      // API returns snake_case fields from DB; access raw data for message_text
+      const raw = entry.data as unknown as Record<string, unknown>;
+      const messageText = (raw.message_text ?? raw.messageText) as string | null;
+      const msgDirection = raw.direction as "inbound" | "outbound" | undefined;
+      const senderName = msgDirection === "outbound"
+        ? "You"
+        : (contactName ?? entry.contactName ?? "").split(" ")[0] || "Them";
       return {
         ...base,
         type: "linkedin_message" as DrawerTimelineEventType,
-        title: "LinkedIn message",
-        description: msg.messageText ?? undefined,
-        direction: msg.direction as "inbound" | "outbound" | undefined,
+        title: senderName,
+        description: messageText ?? undefined,
       };
     }
     case "meeting": {
@@ -74,14 +87,14 @@ export function mapTimelineEntry(entry: TimelineEntry): DrawerTimelineEvent {
         dueDate: task.dueDate ?? undefined,
       };
     }
-    case "stage_change": {
-      const sc = entry.data as StageChange;
+    case "opportunity_stage_change": {
+      const sc = entry.data as OpportunityStageChange;
       return {
         ...base,
-        type: "stage_change" as DrawerTimelineEventType,
+        type: "opportunity_stage_change" as DrawerTimelineEventType,
         title: "Stage changed",
-        fromStage: sc.fromStage,
-        toStage: sc.toStage,
+        fromStage: sc.fromStageLabel ?? undefined,
+        toStage: sc.toStageLabel,
         changedBy: sc.changedByName ?? undefined,
       };
     }

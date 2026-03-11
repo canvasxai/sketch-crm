@@ -4,6 +4,10 @@
  */
 
 import type AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
+import type { createContactsRepository } from "../db/repositories/contacts.js";
+import type { createCompaniesRepository } from "../db/repositories/companies.js";
+import type { createDedupCandidatesRepository } from "../db/repositories/dedup-candidates.js";
+import { areNamesCompatible } from "./dedup.js";
 
 const MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
@@ -120,4 +124,90 @@ export async function classifyPersonalEmail(
       reason: "parse error",
     };
   }
+}
+
+// ── Tier 3: Post-ingestion fuzzy dedup ──
+
+interface Tier3Deps {
+  contacts: ReturnType<typeof createContactsRepository>;
+  companies: ReturnType<typeof createCompaniesRepository>;
+  dedupCandidates: ReturnType<typeof createDedupCandidatesRepository>;
+  anthropic: AnthropicBedrock;
+}
+
+/**
+ * Run Tier 3 dedup on recently classified contacts.
+ * Uses trigram similarity to find candidates, then AI to confirm ambiguous matches.
+ * Returns the number of dedup candidates created.
+ */
+export async function runTier3Dedup(deps: Tier3Deps): Promise<number> {
+  // Get all contacts to check — in practice we'd want a "last_dedup_checked_at" field
+  // For now, check all contacts that have never been part of a dedup candidate
+
+  // Get all contacts to check — in practice we'd want a "last_dedup_checked_at" field
+  // For now, check all contacts that have never been part of a dedup candidate
+  const allContacts = await deps.contacts.list({ limit: 500 });
+
+  let candidatesCreated = 0;
+
+  for (const contact of allContacts) {
+    if (!contact.email && !contact.name) continue;
+
+    // Find similar names via trigram
+    const similar = await deps.contacts.findByNameSimilarity(
+      contact.name,
+      contact.email ?? `__no_email_${contact.id}__`,
+      10,
+    );
+
+    for (const candidate of similar) {
+      if (candidate.id === contact.id) continue;
+
+      // Skip if pair already exists
+      const exists = await deps.dedupCandidates.existsPair(contact.id, candidate.id);
+      if (exists) continue;
+
+      // Check if they're at the same company — if so, nickname check (promotes to auto-merge)
+      if (
+        contact.company_id &&
+        candidate.company_id &&
+        contact.company_id === candidate.company_id &&
+        areNamesCompatible(contact.name, candidate.name)
+      ) {
+        // Same company + compatible names — high confidence match
+        await deps.dedupCandidates.create({
+          contactIdA: contact.id,
+          contactIdB: candidate.id,
+          matchReason: "Same company, compatible names (nickname match)",
+          aiConfidence: "high",
+        });
+        candidatesCreated++;
+        continue;
+      }
+
+      // For ambiguous cases, use AI
+      try {
+        const result = await checkNameDedup(
+          deps.anthropic,
+          contact.name,
+          contact.email ?? "",
+          [{ name: candidate.name, email: candidate.email, id: candidate.id }],
+        );
+
+        if (result.match && result.confidence !== "low") {
+          await deps.dedupCandidates.create({
+            contactIdA: contact.id,
+            contactIdB: candidate.id,
+            matchReason: result.reason,
+            aiConfidence: result.confidence,
+          });
+          candidatesCreated++;
+        }
+      } catch (err) {
+        console.warn(`[ai-dedup] Failed to check pair ${contact.id}/${candidate.id}:`, err);
+      }
+    }
+  }
+
+  return candidatesCreated;
 }

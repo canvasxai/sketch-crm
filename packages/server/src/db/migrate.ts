@@ -14,6 +14,10 @@ import * as m007 from "./migrations/007-tasks-multi-contact-fields.js";
 import * as m008 from "./migrations/008-ingestion-improvements.js";
 import * as m009 from "./migrations/009-aimfox-integration.js";
 import * as m010 from "./migrations/010-email-body-html.js";
+import * as m011 from "./migrations/011-pipeline-opportunities.js";
+import * as m012 from "./migrations/012-dedup-and-classification.js";
+import * as m013 from "./migrations/013-classification-logs-and-flags.js";
+import * as m014 from "./migrations/014-contact-ai-confidence.js";
 import type { DB } from "./schema.js";
 
 export async function runMigrations(db: Kysely<DB>): Promise<void> {
@@ -32,6 +36,10 @@ export async function runMigrations(db: Kysely<DB>): Promise<void> {
           "008-ingestion-improvements": m008,
           "009-aimfox-integration": m009,
           "010-email-body-html": m010,
+          "011-pipeline-opportunities": m011,
+          "012-dedup-and-classification": m012,
+          "013-classification-logs-and-flags": m013,
+          "014-contact-ai-confidence": m014,
         };
       },
     },

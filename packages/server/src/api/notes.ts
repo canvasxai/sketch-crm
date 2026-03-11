@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createNotesRepository } from "../db/repositories/notes.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type NotesRepo = ReturnType<typeof createNotesRepository>;
 
@@ -42,7 +43,7 @@ export function notesRoutes(repo: NotesRepo) {
     const createdBy = c.req.query("createdBy");
 
     const notes = await repo.list({ contactId, createdBy, limit, offset });
-    return c.json({ notes });
+    return c.json({ notes: mapRows(notes) });
   });
 
   // Get a single note
@@ -57,7 +58,7 @@ export function notesRoutes(repo: NotesRepo) {
       );
     }
 
-    return c.json({ note });
+    return c.json({ note: mapRow(note) });
   });
 
   // Create a note
@@ -78,7 +79,7 @@ export function notesRoutes(repo: NotesRepo) {
     }
 
     const note = await repo.create(parsed.data);
-    return c.json({ note }, 201);
+    return c.json({ note: mapRow(note) }, 201);
   });
 
   // Update a note
@@ -108,7 +109,7 @@ export function notesRoutes(repo: NotesRepo) {
     }
 
     const note = await repo.update(id, parsed.data);
-    return c.json({ note });
+    return c.json({ note: mapRow(note) });
   });
 
   // Delete a note

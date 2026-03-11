@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createMeetingsRepository } from "../db/repositories/meetings.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type MeetingsRepo = ReturnType<typeof createMeetingsRepository>;
 
@@ -55,7 +56,7 @@ export function meetingsRoutes(repo: MeetingsRepo) {
     const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
 
     const meetings = await repo.list({ contactId, limit, offset });
-    return c.json({ meetings });
+    return c.json({ meetings: mapRows(meetings) });
   });
 
   // Get a single meeting
@@ -70,7 +71,7 @@ export function meetingsRoutes(repo: MeetingsRepo) {
       );
     }
 
-    return c.json({ meeting });
+    return c.json({ meeting: mapRow(meeting) });
   });
 
   // Create a meeting
@@ -91,7 +92,7 @@ export function meetingsRoutes(repo: MeetingsRepo) {
     }
 
     const meeting = await repo.create(parsed.data);
-    return c.json({ meeting }, 201);
+    return c.json({ meeting: mapRow(meeting) }, 201);
   });
 
   // Update a meeting
@@ -121,7 +122,7 @@ export function meetingsRoutes(repo: MeetingsRepo) {
     }
 
     const meeting = await repo.update(id, parsed.data);
-    return c.json({ meeting });
+    return c.json({ meeting: mapRow(meeting) });
   });
 
   // Delete a meeting

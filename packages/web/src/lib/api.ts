@@ -1,16 +1,26 @@
 import type {
+  ClassificationLogEntry,
+  ClassificationRun,
   Company,
+  CompanyPipeline,
   CompanySource,
   Contact,
   ContactEmailEntry,
   ContactPhoneEntry,
+  ContactPipeline,
   ContactSource,
+  DedupCandidate,
   DedupLogEntry,
   Email,
-  FunnelStage,
   LeadChannel,
   Meeting,
+  MutedDomain,
   Note,
+  Opportunity,
+  OpportunityStageChange,
+  Pipeline,
+  PipelineStage,
+  PipelineWithStages,
   Task,
   TimelineEntry,
   User,
@@ -87,20 +97,56 @@ interface InternalDomainsResponse {
   domains: string[];
 }
 
-interface VendorDomain {
-  id: string;
-  domain: string;
-  source: string;
-  created_at: string;
+interface MutedDomainsResponse {
+  domains: MutedDomain[];
 }
 
-interface VendorDomainsResponse {
-  domains: VendorDomain[];
-}
-
-interface VendorDomainCreateResponse {
-  domain: VendorDomain;
+interface MutedDomainCreateResponse {
+  domain: MutedDomain;
   purged: { contactsRemoved: number; companiesRemoved: number };
+}
+
+// ── Pipeline / Opportunity response types ──
+
+interface PipelineListResponse {
+  pipelines: PipelineWithStages[];
+}
+
+interface PipelineDetailResponse {
+  pipeline: PipelineWithStages;
+}
+
+interface PipelineCreateResponse {
+  pipeline: PipelineWithStages;
+}
+
+interface PipelineUpdateResponse {
+  pipeline: PipelineWithStages;
+}
+
+interface StageResponse {
+  stage: PipelineStage;
+}
+
+interface OpportunityListResponse {
+  opportunities: Opportunity[];
+  total: number;
+}
+
+interface OpportunityDetailResponse {
+  opportunity: Opportunity;
+}
+
+interface OpportunityCreateResponse {
+  opportunity: Opportunity;
+}
+
+interface OpportunityUpdateResponse {
+  opportunity: Opportunity;
+}
+
+interface StageChangesResponse {
+  stageChanges: OpportunityStageChange[];
 }
 
 interface ContactDetailResponse {
@@ -185,21 +231,38 @@ interface GmailSyncResponse {
   };
 }
 
-interface ClassificationChange {
-  contactId: string;
-  name: string;
-  oldStage: string;
-  newStage: string;
+interface ClassificationStartResponse {
+  runId: string | null;
+  message?: string;
 }
 
-interface ClassificationResponse {
-  result: {
-    totalContacts: number;
-    classified: number;
-    changed: number;
-    errors: number;
-    changes: ClassificationChange[];
-  };
+interface ClassificationRunsListResponse {
+  runs: ClassificationRun[];
+}
+
+interface ClassificationRunResponse {
+  run: ClassificationRun | null;
+  logs: ClassificationLogEntry[];
+}
+
+interface NeedsClassificationCountResponse {
+  count: number;
+}
+
+interface ClassificationHistoryResponse {
+  logs: ClassificationLogEntry[];
+}
+
+interface DedupCandidatesListResponse {
+  candidates: DedupCandidate[];
+}
+
+interface DedupCandidateCountResponse {
+  count: number;
+}
+
+interface MergeContactResponse {
+  contact: Contact;
 }
 
 interface SourceStatusResponse {
@@ -283,6 +346,7 @@ export const api = {
   companies: {
     list(params?: {
       search?: string;
+      pipeline?: CompanyPipeline;
       limit?: number;
       offset?: number;
     }): Promise<CompanyListResponse> {
@@ -311,6 +375,7 @@ export const api = {
       description?: string;
       techStack?: string;
       fundingStage?: string;
+      pipeline?: CompanyPipeline;
     }): Promise<CompanyCreateResponse> {
       return request<CompanyCreateResponse>("/api/companies", {
         method: "POST",
@@ -332,6 +397,8 @@ export const api = {
         description: string;
         techStack: string;
         fundingStage: string;
+        pipeline: CompanyPipeline;
+        propagateToContacts: boolean;
       }>,
     ): Promise<CompanyUpdateResponse> {
       return request<CompanyUpdateResponse>(`/api/companies/${id}`, {
@@ -361,7 +428,7 @@ export const api = {
 
   contacts: {
     list(params?: {
-      funnelStage?: FunnelStage;
+      pipeline?: ContactPipeline;
       source?: ContactSource;
       visibility?: string;
       companyId?: string;
@@ -393,7 +460,7 @@ export const api = {
       linkedinUrl?: string;
       companyId?: string;
       source: ContactSource;
-      funnelStage?: FunnelStage;
+      pipeline?: ContactPipeline | null;
       isCanvasUser?: boolean;
       isSketchUser?: boolean;
       usesServices?: boolean;
@@ -420,7 +487,7 @@ export const api = {
         linkedinUrl: string;
         companyId: string;
         source: ContactSource;
-        funnelStage: FunnelStage;
+        pipeline: ContactPipeline | null;
         isCanvasUser: boolean;
         isSketchUser: boolean;
         usesServices: boolean;
@@ -523,6 +590,7 @@ export const api = {
     list(params?: {
       contactId?: string;
       companyId?: string;
+      opportunityId?: string;
       assigneeId?: string;
       completed?: boolean;
       limit?: number;
@@ -535,6 +603,7 @@ export const api = {
     create(body: {
       contactId?: string;
       companyId?: string;
+      opportunityId?: string;
       title: string;
       assigneeId?: string;
       dueDate?: string;
@@ -684,13 +753,41 @@ export const api = {
         body: JSON.stringify(opts ?? {}),
       });
     },
+    cancelAimfoxBackfill(): Promise<{ success: true; wasRunning: boolean }> {
+      return request("/api/integrations/aimfox/cancel", {
+        method: "POST",
+      });
+    },
+    cancelGmailSync(): Promise<{ success: true }> {
+      return request("/api/integrations/gmail/cancel", {
+        method: "POST",
+      });
+    },
   },
 
   classify: {
-    contacts(): Promise<ClassificationResponse> {
-      return request<ClassificationResponse>("/api/classify/contacts", {
+    contacts(): Promise<ClassificationStartResponse> {
+      return request<ClassificationStartResponse>("/api/classify/contacts", {
         method: "POST",
       });
+    },
+    runs(): Promise<ClassificationRunsListResponse> {
+      return request<ClassificationRunsListResponse>("/api/classify/runs");
+    },
+    run(runId: string): Promise<ClassificationRunResponse> {
+      return request<ClassificationRunResponse>(`/api/classify/runs/${runId}`);
+    },
+    latestRun(): Promise<ClassificationRunResponse> {
+      return request<ClassificationRunResponse>("/api/classify/runs/latest");
+    },
+    needsClassificationCount(): Promise<NeedsClassificationCountResponse> {
+      return request<NeedsClassificationCountResponse>("/api/classify/contacts/needs-classification/count");
+    },
+    contactHistory(contactId: string): Promise<ClassificationHistoryResponse> {
+      return request<ClassificationHistoryResponse>(`/api/classify/contacts/${contactId}/classification-history`);
+    },
+    cancel(): Promise<{ success: true; wasRunning: boolean }> {
+      return request("/api/classify/cancel", { method: "POST" });
     },
   },
 
@@ -706,19 +803,19 @@ export const api = {
       });
     },
 
-    getVendorDomains(): Promise<VendorDomainsResponse> {
-      return request<VendorDomainsResponse>("/api/settings/vendor-domains");
+    getMutedDomains(): Promise<MutedDomainsResponse> {
+      return request<MutedDomainsResponse>("/api/settings/muted-domains");
     },
 
-    addVendorDomain(domain: string, source: "manual" | "ai" = "manual"): Promise<VendorDomainCreateResponse> {
-      return request<VendorDomainCreateResponse>("/api/settings/vendor-domains", {
+    addMutedDomain(domain: string, source: "manual" | "ai" = "manual"): Promise<MutedDomainCreateResponse> {
+      return request<MutedDomainCreateResponse>("/api/settings/muted-domains", {
         method: "POST",
         body: JSON.stringify({ domain, source }),
       });
     },
 
-    removeVendorDomain(id: string): Promise<{ success: true }> {
-      return request<{ success: true }>(`/api/settings/vendor-domains/${id}`, {
+    removeMutedDomain(id: string): Promise<{ success: true }> {
+      return request<{ success: true }>(`/api/settings/muted-domains/${id}`, {
         method: "DELETE",
       });
     },
@@ -735,6 +832,156 @@ export const api = {
       return request(`/api/contacts/dedup-log/${logId}/review`, {
         method: "POST",
       });
+    },
+  },
+
+  dedupCandidates: {
+    listPending(): Promise<DedupCandidatesListResponse> {
+      return request<DedupCandidatesListResponse>("/api/contacts/dedup-candidates/pending");
+    },
+    countPending(): Promise<DedupCandidateCountResponse> {
+      return request<DedupCandidateCountResponse>("/api/contacts/dedup-candidates/count");
+    },
+    merge(keepContactId: string, mergeContactId: string): Promise<MergeContactResponse> {
+      return request<MergeContactResponse>("/api/contacts/merge", {
+        method: "POST",
+        body: JSON.stringify({ keepContactId, mergeContactId }),
+      });
+    },
+    dismiss(candidateId: string): Promise<{ candidate: DedupCandidate }> {
+      return request<{ candidate: DedupCandidate }>(`/api/contacts/dedup-candidates/${candidateId}/dismiss`, {
+        method: "POST",
+      });
+    },
+    contactIdsWithPending(): Promise<{ contactIds: string[] }> {
+      return request<{ contactIds: string[] }>("/api/contacts/dedup-candidates/contact-ids");
+    },
+  },
+
+  pipelines: {
+    list(): Promise<PipelineListResponse> {
+      return request<PipelineListResponse>("/api/pipelines");
+    },
+
+    get(id: string): Promise<PipelineDetailResponse> {
+      return request<PipelineDetailResponse>(`/api/pipelines/${id}`);
+    },
+
+    create(body: { name: string; position?: number }): Promise<PipelineCreateResponse> {
+      return request<PipelineCreateResponse>("/api/pipelines", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+
+    update(id: string, body: Partial<{ name: string; position: number }>): Promise<PipelineUpdateResponse> {
+      return request<PipelineUpdateResponse>(`/api/pipelines/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+
+    delete(id: string): Promise<{ success: true }> {
+      return request<{ success: true }>(`/api/pipelines/${id}`, {
+        method: "DELETE",
+      });
+    },
+
+    addStage(
+      pipelineId: string,
+      body: { label: string; stageType?: string; position?: number },
+    ): Promise<StageResponse> {
+      return request<StageResponse>(`/api/pipelines/${pipelineId}/stages`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+
+    updateStage(
+      stageId: string,
+      body: Partial<{ label: string; stageType: string; position: number }>,
+    ): Promise<StageResponse> {
+      return request<StageResponse>(`/api/pipeline-stages/${stageId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+
+    deleteStage(stageId: string): Promise<{ success: true }> {
+      return request<{ success: true }>(`/api/pipeline-stages/${stageId}`, {
+        method: "DELETE",
+      });
+    },
+  },
+
+  opportunities: {
+    list(params?: {
+      pipelineId?: string;
+      stageId?: string;
+      stageType?: string;
+      companyId?: string;
+      contactId?: string;
+      ownerId?: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<OpportunityListResponse> {
+      const query = buildQuery(params ?? {});
+      return request<OpportunityListResponse>(`/api/opportunities${query}`);
+    },
+
+    get(id: string): Promise<OpportunityDetailResponse> {
+      return request<OpportunityDetailResponse>(`/api/opportunities/${id}`);
+    },
+
+    create(body: {
+      companyId?: string;
+      contactId?: string;
+      pipelineId: string;
+      stageId: string;
+      title?: string;
+      value?: number;
+      valuePeriod?: string;
+      confidence?: number;
+      closeDate?: string;
+      ownerId?: string;
+      notes?: string;
+    }): Promise<OpportunityCreateResponse> {
+      return request<OpportunityCreateResponse>("/api/opportunities", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+
+    update(
+      id: string,
+      body: Partial<{
+        companyId: string | null;
+        contactId: string | null;
+        pipelineId: string;
+        stageId: string;
+        title: string | null;
+        value: number | null;
+        valuePeriod: string | null;
+        confidence: number | null;
+        closeDate: string | null;
+        ownerId: string | null;
+        notes: string | null;
+      }>,
+    ): Promise<OpportunityUpdateResponse> {
+      return request<OpportunityUpdateResponse>(`/api/opportunities/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+
+    delete(id: string): Promise<{ success: true }> {
+      return request<{ success: true }>(`/api/opportunities/${id}`, {
+        method: "DELETE",
+      });
+    },
+
+    stageChanges(opportunityId: string): Promise<StageChangesResponse> {
+      return request<StageChangesResponse>(`/api/opportunities/${opportunityId}/stage-changes`);
     },
   },
 

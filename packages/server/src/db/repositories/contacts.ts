@@ -1,8 +1,9 @@
 import { sql, type Kysely } from "kysely";
 import type { DB } from "../schema.js";
+import { areNamesCompatible } from "../../lib/dedup.js";
 
 export interface ContactFilters {
-  funnelStage?: "new" | "qualified" | "opportunity" | "customer" | "dormant" | "lost";
+  pipeline?: string;
   source?: string;
   companyId?: string;
   ownerId?: string;
@@ -23,8 +24,8 @@ export function createContactsRepository(db: Kysely<DB>) {
     filters: ContactFilters,
     { needsOwnerJoin }: { needsOwnerJoin: boolean } = { needsOwnerJoin: true },
   ) {
-    if (filters.funnelStage !== undefined) {
-      query = query.where("contacts.funnel_stage", "=", filters.funnelStage);
+    if (filters.pipeline !== undefined) {
+      query = query.where("contacts.pipeline", "=", filters.pipeline);
     }
     if (filters.source !== undefined) {
       query = query.where("contacts.source", "=", filters.source);
@@ -171,7 +172,7 @@ export function createContactsRepository(db: Kysely<DB>) {
         .executeTakeFirst();
     },
 
-    async findDuplicate(data: { email?: string; linkedinUrl?: string }) {
+    async findDuplicate(data: { email?: string; linkedinUrl?: string; name?: string; companyDomain?: string }) {
       if (data.email) {
         // Check primary email field
         const contact = await db
@@ -214,7 +215,94 @@ export function createContactsRepository(db: Kysely<DB>) {
         }
       }
 
+      // Tier 2: Name + company domain match (cross-source dedup)
+      if (data.name && data.companyDomain) {
+        const candidates = await db
+          .selectFrom("contacts")
+          .innerJoin("companies", "companies.id", "contacts.company_id")
+          .selectAll("contacts")
+          .where(sql`lower(companies.domain)`, "=", data.companyDomain.toLowerCase())
+          .execute();
+
+        for (const candidate of candidates) {
+          if (areNamesCompatible(data.name, candidate.name)) {
+            return { contact: candidate, matchedOn: "name_company_domain" as const };
+          }
+        }
+      }
+
       return null;
+    },
+
+    /**
+     * Find contacts at companies with a given domain.
+     */
+    async findByCompanyDomain(companyDomain: string, excludeId?: string) {
+      let query = db
+        .selectFrom("contacts")
+        .innerJoin("companies", "companies.id", "contacts.company_id")
+        .selectAll("contacts")
+        .where(sql`lower(companies.domain)`, "=", companyDomain.toLowerCase());
+
+      if (excludeId) {
+        query = query.where("contacts.id", "!=", excludeId);
+      }
+
+      return query.execute();
+    },
+
+    /**
+     * Find unclassified contacts (for AI batch processing).
+     */
+    async findUnclassified() {
+      return db
+        .selectFrom("contacts")
+        .selectAll()
+        .where("needs_classification", "=", true)
+        .orderBy("created_at", "asc")
+        .execute();
+    },
+
+    async countNeedsClassification() {
+      const result = await db
+        .selectFrom("contacts")
+        .select(db.fn.countAll().as("count"))
+        .where("needs_classification", "=", true)
+        .executeTakeFirstOrThrow();
+      return Number(result.count);
+    },
+
+    async setNeedsClassification(ids: string[]) {
+      if (ids.length === 0) return;
+      await db
+        .updateTable("contacts")
+        .set({ needs_classification: true })
+        .where("id", "in", ids)
+        .execute();
+    },
+
+    /**
+     * Update AI classification fields on a contact.
+     */
+    async updateClassification(id: string, data: { aiSummary: string | null; pipeline?: string | null; aiConfidence?: string | null }) {
+      const values: Record<string, unknown> = {
+        ai_summary: data.aiSummary,
+        ai_classified_at: sql`now()`,
+        needs_classification: false,
+      };
+      if (data.pipeline !== undefined) {
+        values.pipeline = data.pipeline;
+      }
+      if (data.aiConfidence !== undefined) {
+        values.ai_confidence = data.aiConfidence;
+      }
+
+      return db
+        .updateTable("contacts")
+        .set(values)
+        .where("id", "=", id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
     },
 
     /**
@@ -261,7 +349,7 @@ export function createContactsRepository(db: Kysely<DB>) {
       linkedinUrl?: string;
       companyId?: string;
       source: string;
-      funnelStage?: string;
+      pipeline?: string | null;
       isCanvasUser?: boolean;
       isSketchUser?: boolean;
       usesServices?: boolean;
@@ -284,8 +372,9 @@ export function createContactsRepository(db: Kysely<DB>) {
           linkedin_url: data.linkedinUrl ?? null,
           company_id: data.companyId ?? null,
           source: data.source,
-          ...(data.funnelStage !== undefined
-            ? { funnel_stage: data.funnelStage }
+          needs_classification: true,
+          ...(data.pipeline !== undefined
+            ? { pipeline: data.pipeline }
             : {}),
           ...(data.isCanvasUser !== undefined
             ? { is_canvas_user: data.isCanvasUser }
@@ -327,7 +416,7 @@ export function createContactsRepository(db: Kysely<DB>) {
         linkedinUrl: string | null;
         companyId: string | null;
         source: string;
-        funnelStage: string;
+        pipeline: string | null;
         isCanvasUser: boolean;
         isSketchUser: boolean;
         usesServices: boolean;
@@ -348,7 +437,7 @@ export function createContactsRepository(db: Kysely<DB>) {
       if (data.linkedinUrl !== undefined) values.linkedin_url = data.linkedinUrl;
       if (data.companyId !== undefined) values.company_id = data.companyId;
       if (data.source !== undefined) values.source = data.source;
-      if (data.funnelStage !== undefined) values.funnel_stage = data.funnelStage;
+      if (data.pipeline !== undefined) values.pipeline = data.pipeline;
       if (data.isCanvasUser !== undefined) values.is_canvas_user = data.isCanvasUser;
       if (data.isSketchUser !== undefined) values.is_sketch_user = data.isSketchUser;
       if (data.usesServices !== undefined) values.uses_services = data.usesServices;
@@ -386,6 +475,19 @@ export function createContactsRepository(db: Kysely<DB>) {
         .updateTable("contacts")
         .set({ visibility })
         .where("id", "in", ids)
+        .execute();
+
+      return result.length > 0 ? Number(result[0].numUpdatedRows) : 0;
+    },
+
+    /**
+     * Update pipeline for all contacts belonging to a company.
+     */
+    async updatePipelineByCompanyId(companyId: string, pipeline: string) {
+      const result = await db
+        .updateTable("contacts")
+        .set({ pipeline })
+        .where("company_id", "=", companyId)
         .execute();
 
       return result.length > 0 ? Number(result[0].numUpdatedRows) : 0;
@@ -457,6 +559,38 @@ export function createContactsRepository(db: Kysely<DB>) {
         .where("contact_owners.contact_id", "=", contactId)
         .orderBy("contact_owners.created_at", "asc")
         .execute();
+    },
+
+    /**
+     * Batch-fetch owners for a list of contacts (avoids N+1).
+     * Returns a map of contactId → owner array.
+     */
+    async getOwnersBatch(contactIds: string[]) {
+      if (contactIds.length === 0) return {} as Record<string, Array<{ id: string; name: string; avatarUrl: string | null }>>;
+
+      const rows = await db
+        .selectFrom("contact_owners")
+        .innerJoin("users", "users.id", "contact_owners.user_id")
+        .select([
+          "contact_owners.contact_id",
+          "users.id",
+          "users.name",
+          "users.avatar_url",
+        ])
+        .where("contact_owners.contact_id", "in", contactIds)
+        .orderBy("contact_owners.created_at", "asc")
+        .execute();
+
+      const result: Record<string, Array<{ id: string; name: string; avatarUrl: string | null }>> = {};
+      for (const row of rows) {
+        if (!result[row.contact_id]) result[row.contact_id] = [];
+        result[row.contact_id].push({
+          id: row.id,
+          name: row.name,
+          avatarUrl: row.avatar_url,
+        });
+      }
+      return result;
     },
   };
 }

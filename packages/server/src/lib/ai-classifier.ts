@@ -1,72 +1,128 @@
 /**
- * AI-powered contact classification using Claude Haiku.
- * Classifies contacts into funnel stages based on their email history.
+ * AI-powered contact classification using Claude Haiku via Bedrock.
+ * Classifies contacts into pipelines and generates context summaries.
  */
 
-import AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
-import { FUNNEL_STAGES } from "@crm/shared";
+import type AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
 
-const CLASSIFICATION_PROMPT = `You are a sales CRM assistant. Given a contact's email history, classify them into exactly one funnel stage.
+const MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
-Funnel stages:
-- "new": No meaningful engagement yet, or just initial outreach
-- "qualified": Has shown interest, responded to outreach, or had initial conversations
-- "opportunity": Active deal discussion, pricing/proposal stage, demo requests
-- "customer": Has purchased/signed, is an active paying customer
-- "dormant": Was previously engaged but has gone silent (no response in 30+ days)
-- "lost": Explicitly declined, chose competitor, or deal fell through
+const CLASSIFICATION_PROMPT = `You are a CRM assistant for a B2B services/SaaS company. Given a contact's information and their recent communication history, classify them into one of these pipelines:
 
-Rules:
-- Base your classification on the CONTENT and RECENCY of emails
-- If the most recent email is a decline or "no thanks", classify as "lost"
-- If there's been no response to the last 2+ outreach emails, classify as "dormant"
-- Look for buying signals: pricing questions, timeline discussions, decision-maker involvement → "opportunity"
-- Look for closing signals: contract discussions, onboarding, payment → "customer"
+- "sales" — Active sales prospect. Someone we are selling to or trying to sell to. Includes warm leads, demo requests, pricing discussions, proposal conversations. This is the primary business contact driving the deal.
+- "client" — Existing customer or client. Someone who has already purchased or is using our services/products. Includes support conversations, account management, renewals. This is the primary relationship contact.
+- "connected" — A contact at a company we're already engaging with who isn't the primary relationship driver. Developers, operations, finance, legal, IT, or other team members at a sales prospect or client company. They are relevant but not the main sales/client contact.
+- "hiring" — Job candidate or hiring-related contact. Someone applying for a role, being recruited, or involved in hiring discussions.
+- "muted" — Irrelevant contact. Newsletters, automated emails, vendors trying to sell to US, spam, cold outreach from others, transactional notifications.
+- "uncategorized" — Not enough information to classify. Only use this if there is truly insufficient signal.
 
-Respond with ONLY the stage name, nothing else. One of: new, qualified, opportunity, customer, dormant, lost`;
+Also generate a brief summary (1-2 sentences) describing the relationship context. For sales/client contacts, focus on what's being discussed, deal stage, or product interest. For connected contacts, describe their role and how they relate to the primary engagement. For hiring contacts, mention the role. For muted contacts, explain why they're irrelevant. For uncategorized, say what little is known.
 
-interface EmailSummary {
-  from: string;
-  to: string;
+Respond with ONLY a JSON object:
+{ "pipeline": "sales"|"client"|"connected"|"hiring"|"muted"|"uncategorized", "summary": "<1-2 sentence context>", "confidence": "high"|"medium"|"low" }`;
+
+interface EmailContext {
   subject: string;
-  body: string;
-  date: string;
+  snippet: string;
   direction: string;
+  date: string;
+}
+
+interface MessageContext {
+  text: string;
+  direction: string;
+  date: string;
+}
+
+export interface ClassificationResult {
+  pipeline: string;
+  summary: string;
+  confidence: string;
 }
 
 export async function classifyContact(
   anthropic: AnthropicBedrock,
-  contactName: string,
-  contactEmail: string,
-  emails: EmailSummary[],
-): Promise<string> {
-  const emailThread = emails
-    .slice(0, 20)
-    .map((e) => {
-      const body = (e.body || "").slice(0, 500);
-      return `[${e.date}] ${e.direction.toUpperCase()}: ${e.subject}\nFrom: ${e.from}\nTo: ${e.to}\n${body}`;
-    })
-    .join("\n---\n");
+  contact: {
+    name: string;
+    email: string | null;
+    title: string | null;
+    companyName: string | null;
+    companyDomain: string | null;
+  },
+  emails: EmailContext[],
+  messages: MessageContext[],
+  options?: { signal?: AbortSignal },
+): Promise<ClassificationResult> {
+  const contactInfo = [
+    `Name: ${contact.name}`,
+    contact.email ? `Email: ${contact.email}` : null,
+    contact.title ? `Title: ${contact.title}` : null,
+    contact.companyName ? `Company: ${contact.companyName}` : null,
+    contact.companyDomain ? `Domain: ${contact.companyDomain}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  const response = await anthropic.messages.create({
-    model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    max_tokens: 10,
-    messages: [
+  const emailHistory =
+    emails.length > 0
+      ? emails
+          .map(
+            (e) =>
+              `[${e.direction}] ${e.date} — ${e.subject}\n${e.snippet}`,
+          )
+          .join("\n\n")
+      : "No email history.";
+
+  const messageHistory =
+    messages.length > 0
+      ? messages
+          .map((m) => `[${m.direction}] ${m.date} — ${m.text}`)
+          .join("\n\n")
+      : "No LinkedIn message history.";
+
+  const userContent = `CONTACT:\n${contactInfo}\n\nRECENT EMAILS (last ${emails.length}):\n${emailHistory}\n\nRECENT LINKEDIN MESSAGES (last ${messages.length}):\n${messageHistory}`;
+
+  try {
+    const response = await anthropic.messages.create(
       {
-        role: "user",
-        content: `Contact: ${contactName} (${contactEmail})\n\nEmail history (most recent first):\n${emailThread}`,
+        model: MODEL,
+        max_tokens: 300,
+        messages: [{ role: "user", content: userContent }],
+        system: CLASSIFICATION_PROMPT,
       },
-    ],
-    system: CLASSIFICATION_PROMPT,
-  });
+      { timeout: 30_000, signal: options?.signal as AbortSignal | undefined },
+    );
 
-  const text =
-    response.content[0]?.type === "text"
-      ? response.content[0].text.trim().toLowerCase()
-      : "new";
+    let text =
+      response.content[0]?.type === "text"
+        ? response.content[0].text.trim()
+        : "";
 
-  if ((FUNNEL_STAGES as readonly string[]).includes(text)) {
-    return text;
+    // Strip markdown code fences if the model wraps its response in ```json ... ```
+    text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+    const parsed = JSON.parse(text) as ClassificationResult;
+
+    // Validate pipeline value
+    const validPipelines = [
+      "sales",
+      "client",
+      "connected",
+      "hiring",
+      "muted",
+      "uncategorized",
+    ];
+    if (!validPipelines.includes(parsed.pipeline)) {
+      parsed.pipeline = "uncategorized";
+    }
+
+    return parsed;
+  } catch (err) {
+    console.warn("[ai-classifier] Classification failed:", err);
+    return {
+      pipeline: "uncategorized",
+      summary: "",
+      confidence: "low",
+    };
   }
-  return "new";
 }

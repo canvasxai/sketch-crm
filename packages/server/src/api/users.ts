@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createUsersRepository } from "../db/repositories/users.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type UsersRepo = ReturnType<typeof createUsersRepository>;
 
@@ -26,7 +27,7 @@ export function usersRoutes(repo: UsersRepo) {
   // List all users
   routes.get("/", async (c) => {
     const users = await repo.list();
-    return c.json({ users });
+    return c.json({ users: mapRows(users) });
   });
 
   // Create a new user
@@ -48,7 +49,7 @@ export function usersRoutes(repo: UsersRepo) {
 
     try {
       const user = await repo.create(parsed.data);
-      return c.json({ user }, 201);
+      return c.json({ user: mapRow(user) }, 201);
     } catch (err: unknown) {
       if (
         err instanceof Error &&
@@ -95,7 +96,7 @@ export function usersRoutes(repo: UsersRepo) {
     }
 
     const user = await repo.update(id, parsed.data);
-    return c.json({ user });
+    return c.json({ user: mapRow(user) });
   });
 
   // Delete a user

@@ -15,12 +15,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useDedupCandidateCount } from "@/hooks/use-dedup-candidates";
 import { useSourceStatus } from "@/hooks/use-integrations";
 import { useTheme } from "@/hooks/use-theme";
 import {
   ArrowsClockwiseIcon,
   BuildingsIcon,
   ClockIcon,
+  CopyIcon,
   DownloadSimpleIcon,
   GearSixIcon,
   KanbanIcon,
@@ -43,6 +45,7 @@ const primaryNav: NavItem[] = [
   { label: "Pipeline", icon: <KanbanIcon size={18} />, href: "/" },
   { label: "Companies", icon: <BuildingsIcon size={18} />, href: "/companies" },
   { label: "Contacts", icon: <UsersIcon size={18} />, href: "/contacts" },
+  { label: "Duplicates", icon: <CopyIcon size={18} />, href: "/dedup-review" },
   { label: "Activities", icon: <ClockIcon size={18} />, href: "/activities" },
   { label: "Team", icon: <UsersThreeIcon size={18} />, href: "/team" },
   { label: "Imports", icon: <DownloadSimpleIcon size={18} />, href: "/import" },
@@ -54,6 +57,8 @@ export function AppSidebar({ email }: { email: string }) {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const initials = email ? email.slice(0, 2).toUpperCase() : "??";
+  const { data: dedupCount } = useDedupCandidateCount();
+  const pendingDedups = dedupCount?.count ?? 0;
   const { data: sourceStatus } = useSourceStatus();
   const anySyncing =
     sourceStatus?.gmail.status === "syncing" ||
@@ -97,6 +102,11 @@ export function AppSidebar({ email }: { email: string }) {
                     <span>{item.label}</span>
                     {item.label === "Imports" && anySyncing && (
                       <span className="ml-auto size-2 rounded-full bg-primary animate-pulse" />
+                    )}
+                    {item.label === "Duplicates" && pendingDedups > 0 && (
+                      <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-orange-500 px-1.5 text-[10px] font-medium text-white">
+                        {pendingDedups > 99 ? "99+" : pendingDedups}
+                      </span>
                     )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>

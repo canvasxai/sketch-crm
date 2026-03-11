@@ -108,6 +108,34 @@ export function useUpdateCalendarSyncFrequency() {
   });
 }
 
+export function useCancelAimfoxBackfill() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.integrations.cancelAimfoxBackfill(),
+    onSuccess: () => {
+      toast.success("LinkedIn import cancelled");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function useCancelGmailSync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.integrations.cancelGmailSync(),
+    onSuccess: () => {
+      toast.success("Gmail import cancelled");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
 export function useAimfoxAccounts() {
   return useQuery({
     queryKey: ["integrations", "aimfox", "accounts"],

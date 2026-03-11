@@ -23,30 +23,30 @@ export function useUpdateInternalDomains() {
   });
 }
 
-export function useVendorDomains() {
+export function useMutedDomains() {
   return useQuery({
-    queryKey: ["settings", "vendor-domains"],
-    queryFn: () => api.settings.getVendorDomains(),
+    queryKey: ["settings", "muted-domains"],
+    queryFn: () => api.settings.getMutedDomains(),
   });
 }
 
-export function useAddVendorDomain() {
+export function useAddMutedDomain() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: ({ domain, source }: { domain: string; source?: "manual" | "ai" }) =>
-      api.settings.addVendorDomain(domain, source),
+      api.settings.addMutedDomain(domain, source),
     onSuccess: (data) => {
       const { contactsRemoved, companiesRemoved } = data.purged;
       if (contactsRemoved > 0 || companiesRemoved > 0) {
         toast.success(
-          `Vendor domain added — removed ${contactsRemoved} contact${contactsRemoved !== 1 ? "s" : ""} and ${companiesRemoved} compan${companiesRemoved !== 1 ? "ies" : "y"}`,
+          `Muted domain added — removed ${contactsRemoved} contact${contactsRemoved !== 1 ? "s" : ""} and ${companiesRemoved} compan${companiesRemoved !== 1 ? "ies" : "y"}`,
         );
       } else {
-        toast.success("Vendor domain added");
+        toast.success("Muted domain added");
       }
       queryClient.invalidateQueries({
-        queryKey: ["settings", "vendor-domains"],
+        queryKey: ["settings", "muted-domains"],
       });
       // Also refresh contacts/companies lists since records may have been purged
       queryClient.invalidateQueries({ queryKey: ["contacts"] });
@@ -55,16 +55,21 @@ export function useAddVendorDomain() {
   });
 }
 
-export function useRemoveVendorDomain() {
+export function useRemoveMutedDomain() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (id: string) => api.settings.removeVendorDomain(id),
+    mutationFn: (id: string) => api.settings.removeMutedDomain(id),
     onSuccess: () => {
-      toast.success("Vendor domain removed");
+      toast.success("Muted domain removed");
       queryClient.invalidateQueries({
-        queryKey: ["settings", "vendor-domains"],
+        queryKey: ["settings", "muted-domains"],
       });
     },
   });
 }
+
+// Legacy aliases for backward compatibility during migration
+export const useVendorDomains = useMutedDomains;
+export const useAddVendorDomain = useAddMutedDomain;
+export const useRemoveVendorDomain = useRemoveMutedDomain;

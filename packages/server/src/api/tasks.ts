@@ -1,12 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { createTasksRepository } from "../db/repositories/tasks.js";
+import { mapRow, mapRows } from "../lib/map-row.js";
 
 type TasksRepo = ReturnType<typeof createTasksRepository>;
 
 const createSchema = z.object({
   contactId: z.string().optional(),
   companyId: z.string().optional(),
+  opportunityId: z.string().optional(),
   title: z.string().min(1, "Title is required"),
   assigneeId: z.string().optional(),
   dueDate: z.string().optional(),
@@ -20,6 +22,7 @@ const updateSchema = z.object({
   completed: z.boolean().optional(),
   contactId: z.string().nullable().optional(),
   companyId: z.string().nullable().optional(),
+  opportunityId: z.string().nullable().optional(),
 });
 
 export function tasksRoutes(repo: TasksRepo) {
@@ -30,6 +33,7 @@ export function tasksRoutes(repo: TasksRepo) {
     const filters = {
       contactId: c.req.query("contactId"),
       companyId: c.req.query("companyId"),
+      opportunityId: c.req.query("opportunityId"),
       assigneeId: c.req.query("assigneeId"),
       completed: c.req.query("completed") !== undefined
         ? c.req.query("completed") === "true"
@@ -39,7 +43,7 @@ export function tasksRoutes(repo: TasksRepo) {
     };
 
     const tasks = await repo.list(filters);
-    return c.json({ tasks });
+    return c.json({ tasks: mapRows(tasks) });
   });
 
   // Get a single task
@@ -54,7 +58,7 @@ export function tasksRoutes(repo: TasksRepo) {
       );
     }
 
-    return c.json({ task });
+    return c.json({ task: mapRow(task) });
   });
 
   // Create a task
@@ -75,7 +79,7 @@ export function tasksRoutes(repo: TasksRepo) {
     }
 
     const task = await repo.create(parsed.data);
-    return c.json({ task }, 201);
+    return c.json({ task: mapRow(task) }, 201);
   });
 
   // Update a task
@@ -105,7 +109,7 @@ export function tasksRoutes(repo: TasksRepo) {
     }
 
     const task = await repo.update(id, parsed.data);
-    return c.json({ task });
+    return c.json({ task: mapRow(task) });
   });
 
   // Delete a task

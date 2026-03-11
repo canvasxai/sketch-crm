@@ -1,21 +1,21 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../schema.js";
 
-export interface VendorDomain {
+export interface MutedDomain {
   id: string;
   domain: string;
   source: string;
   created_at: string;
 }
 
-export function createVendorDomainsRepository(db: Kysely<DB>) {
+export function createMutedDomainsRepository(db: Kysely<DB>) {
   return {
     /**
-     * List all vendor domains, ordered by domain name.
+     * List all muted domains, ordered by domain name.
      */
-    async list(): Promise<VendorDomain[]> {
+    async list(): Promise<MutedDomain[]> {
       return db
-        .selectFrom("vendor_domains")
+        .selectFrom("muted_domains")
         .select(["id", "domain", "source", "created_at"])
         .orderBy("domain", "asc")
         .execute();
@@ -25,20 +25,20 @@ export function createVendorDomainsRepository(db: Kysely<DB>) {
      * Get just the domain strings (used by gmail-sync for filtering).
      */
     async getDomainList(): Promise<string[]> {
-      const rows = await db.selectFrom("vendor_domains").select("domain").execute();
+      const rows = await db.selectFrom("muted_domains").select("domain").execute();
       return rows.map((r) => r.domain);
     },
 
     /**
-     * Add a vendor domain. Returns the created record.
+     * Add a muted domain. Returns the created record.
      * Normalizes to lowercase. Skips if already exists.
      */
-    async add(domain: string, source: "manual" | "ai" = "manual"): Promise<VendorDomain | null> {
+    async add(domain: string, source: "manual" | "ai" = "manual"): Promise<MutedDomain | null> {
       const normalized = domain.toLowerCase().trim();
       if (!normalized) return null;
 
       const result = await db
-        .insertInto("vendor_domains")
+        .insertInto("muted_domains")
         .values({ domain: normalized, source })
         .onConflict((oc) => oc.column("domain").doNothing())
         .returning(["id", "domain", "source", "created_at"])
@@ -48,19 +48,19 @@ export function createVendorDomainsRepository(db: Kysely<DB>) {
     },
 
     /**
-     * Remove a vendor domain by ID.
+     * Remove a muted domain by ID.
      */
     async remove(id: string): Promise<boolean> {
-      const result = await db.deleteFrom("vendor_domains").where("id", "=", id).executeTakeFirst();
+      const result = await db.deleteFrom("muted_domains").where("id", "=", id).executeTakeFirst();
       return (result.numDeletedRows ?? 0n) > 0n;
     },
 
     /**
-     * Remove a vendor domain by domain string.
+     * Remove a muted domain by domain string.
      */
     async removeByDomain(domain: string): Promise<boolean> {
       const result = await db
-        .deleteFrom("vendor_domains")
+        .deleteFrom("muted_domains")
         .where("domain", "=", domain.toLowerCase().trim())
         .executeTakeFirst();
       return (result.numDeletedRows ?? 0n) > 0n;

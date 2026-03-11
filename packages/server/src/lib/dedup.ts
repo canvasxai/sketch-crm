@@ -1,9 +1,12 @@
 /**
  * Contact deduplication utilities.
  *
- * Provides helpers for normalising identifiers (e.g. LinkedIn URLs) and
- * merging incoming data into existing records without overwriting values.
+ * Provides helpers for normalising identifiers (e.g. LinkedIn URLs),
+ * merging incoming data into existing records without overwriting values,
+ * and name-based matching with nickname support.
  */
+
+import { areFirstNamesEquivalent } from "./nicknames.js";
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -80,4 +83,66 @@ export function computeMergeUpdate(
   }
 
   return update;
+}
+
+// ── Name matching ───────────────────────────────────────────────────────────
+
+/**
+ * Extracts the first name from a full name string.
+ * Handles prefixes like "Dr.", "Mr.", "Mrs." etc.
+ *
+ * @example extractFirstName("Dr. John Smith") → "john"
+ * @example extractFirstName("Jane Doe") → "jane"
+ */
+export function extractFirstName(fullName: string): string {
+  const prefixes = new Set(["dr", "mr", "mrs", "ms", "miss", "prof", "sir", "rev"]);
+  const tokens = fullName.trim().toLowerCase().split(/\s+/);
+
+  for (const token of tokens) {
+    const cleaned = token.replace(/\.$/, ""); // strip trailing dot
+    if (!prefixes.has(cleaned) && cleaned.length > 1) {
+      return cleaned;
+    }
+  }
+
+  return tokens[0]?.replace(/\.$/, "") ?? "";
+}
+
+/**
+ * Extracts the last name from a full name string.
+ * Returns empty string if only one name token.
+ *
+ * @example extractLastName("John Smith") → "smith"
+ * @example extractLastName("Dr. J. Patel") → "patel"
+ */
+export function extractLastName(fullName: string): string {
+  const tokens = fullName.trim().toLowerCase().split(/\s+/);
+  if (tokens.length < 2) return "";
+  return tokens[tokens.length - 1];
+}
+
+/**
+ * Checks if two full names likely refer to the same person.
+ * Uses nickname equivalence for first names and exact match for last names.
+ *
+ * @example areNamesCompatible("Robert Smith", "Bob Smith") → true
+ * @example areNamesCompatible("John Smith", "John Jones") → false
+ * @example areNamesCompatible("Dr. J. Patel", "Jay Patel") → false (initials not matched)
+ */
+export function areNamesCompatible(nameA: string, nameB: string): boolean {
+  const lastA = extractLastName(nameA);
+  const lastB = extractLastName(nameB);
+
+  // Both must have a last name and they must match
+  if (!lastA || !lastB || lastA !== lastB) return false;
+
+  const firstA = extractFirstName(nameA);
+  const firstB = extractFirstName(nameB);
+
+  if (!firstA || !firstB) return false;
+
+  // Skip single-letter initials — too ambiguous
+  if (firstA.length === 1 || firstB.length === 1) return false;
+
+  return areFirstNamesEquivalent(firstA, firstB);
 }
