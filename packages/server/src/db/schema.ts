@@ -35,7 +35,7 @@ export interface CompaniesTable {
   description: string | null;
   tech_stack: string | null;
   funding_stage: string | null;
-  pipeline: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring'
+  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors'
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -59,10 +59,11 @@ export interface ContactsTable {
   linkedin_url: string | null;
   company_id: string | null;
   source: string;
-  pipeline: string | null; // override: 'hiring' etc. — null = inherit from company
+  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors'
   is_canvas_user: Generated<boolean>;
   is_sketch_user: Generated<boolean>;
   uses_services: Generated<boolean>;
+  is_decision_maker: Generated<boolean>;
   canvas_signup_date: string | null;
   visibility: Generated<string>;
   created_by_user_id: string | null;
@@ -75,6 +76,8 @@ export interface ContactsTable {
   ai_classified_at: string | null;
   ai_confidence: string | null;
   needs_classification: Generated<boolean>;
+  linkedin_enriched_at: string | null;
+  dedup_checked_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -339,7 +342,7 @@ export interface ClassificationRunsTable {
   status: Generated<string>; // 'running' | 'completed' | 'failed'
   total_contacts: Generated<number>;
   processed_contacts: Generated<number>;
-  pipeline_changes: Generated<number>;
+  category_changes: Generated<number>;
   errors: Generated<number>;
   started_at: Generated<string>;
   completed_at: string | null;
@@ -351,8 +354,8 @@ export interface ClassificationLogsTable {
   id: Generated<string>;
   contact_id: string;
   run_id: string;
-  pipeline_assigned: string | null;
-  previous_pipeline: string | null;
+  category_assigned: string | null;
+  previous_category: string | null;
   ai_summary: string | null;
   confidence: string | null;
   created_at: Generated<string>;

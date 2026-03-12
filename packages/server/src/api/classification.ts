@@ -8,8 +8,11 @@ import type { createDedupCandidatesRepository } from "../db/repositories/dedup-c
 import type { createClassificationRunsRepository } from "../db/repositories/classification-runs.js";
 import type { createClassificationLogsRepository } from "../db/repositories/classification-logs.js";
 import { createBedrockClient } from "../lib/bedrock.js";
+import { createCanvasClient } from "../lib/canvas-client.js";
 import { classifyContact } from "../lib/ai-classifier.js";
 import { runTier3Dedup } from "../lib/ai-dedup.js";
+import { crossSourceDbMatch, enrichContactLinkedin, shouldEnrichForCategory } from "../lib/cross-source-dedup.js";
+import { mapRow } from "../lib/map-row.js";
 
 interface ClassificationDeps {
   contacts: ReturnType<typeof createContactsRepository>;
@@ -64,6 +67,9 @@ export function classificationRoutes(deps: ClassificationDeps) {
       try {
         console.log(`[classification] Starting run ${run.id} — ${unclassified.length} contacts`);
 
+        // Company category cache — avoids redundant AI calls for contacts at already-categorized companies
+        const companyCategoryCache = new Map<string, string>();
+
         for (let i = 0; i < unclassified.length; i++) {
           const contact = unclassified[i];
           // Check for cancellation at the start of each contact
@@ -76,14 +82,42 @@ export function classificationRoutes(deps: ClassificationDeps) {
           console.log(`[classification] [${i + 1}/${unclassified.length}] Processing: ${contactLabel}`);
 
           try {
-            // Fetch company info
+            // Fetch company info + check if company already categorized
             let companyName: string | null = null;
             let companyDomain: string | null = null;
             if (contact.company_id) {
-              const company = await deps.companies.findById(contact.company_id);
-              if (company) {
-                companyName = company.name;
-                companyDomain = company.domain;
+              // Check cache first — skip AI if company already categorized
+              let knownCategory = companyCategoryCache.get(contact.company_id);
+
+              if (!knownCategory) {
+                const company = await deps.companies.findById(contact.company_id);
+                if (company) {
+                  companyName = company.name;
+                  companyDomain = company.domain;
+                  if (company.category && company.category !== "uncategorized") {
+                    knownCategory = company.category;
+                    companyCategoryCache.set(contact.company_id, knownCategory);
+                  }
+                }
+              }
+
+              if (knownCategory) {
+                // Inherit company category — skip AI call
+                const previousCategory = contact.category ?? "uncategorized";
+                await deps.contacts.updateClassification(contact.id, {
+                  category: knownCategory,
+                });
+                await deps.classificationLogs.create({
+                  contactId: contact.id,
+                  runId: run.id,
+                  categoryAssigned: knownCategory,
+                  previousCategory,
+                  aiSummary: null,
+                  confidence: "inherited",
+                });
+                await deps.classificationRuns.incrementProcessed(run.id, knownCategory !== previousCategory);
+                console.log(`[classification] [${i + 1}/${unclassified.length}] Skipping AI — company already categorized as "${knownCategory}": ${contactLabel}`);
+                continue;
               }
             }
 
@@ -112,6 +146,24 @@ export function classificationRoutes(deps: ClassificationDeps) {
               date: m.sent_at,
             }));
 
+            // Skip LinkedIn-only contacts with no communication history — AI has nothing to classify
+            if (contact.source === "linkedin" && recentEmails.length === 0 && recentMessages.length === 0) {
+              await deps.contacts.updateClassification(contact.id, {
+                category: "uncategorized",
+              });
+              await deps.classificationLogs.create({
+                contactId: contact.id,
+                runId: run.id,
+                categoryAssigned: "uncategorized",
+                previousCategory: contact.category ?? "uncategorized",
+                aiSummary: null,
+                confidence: "skipped",
+              });
+              await deps.classificationRuns.incrementProcessed(run.id, false);
+              console.log(`[classification] [${i + 1}/${unclassified.length}] Skipping AI — LinkedIn contact with no messages: ${contactLabel}`);
+              continue;
+            }
+
             console.log(`[classification] [${i + 1}/${unclassified.length}] Calling Bedrock for: ${contactLabel} (${recentEmails.length} emails, ${recentMessages.length} messages)`);
             const bedrockStart = Date.now();
 
@@ -131,46 +183,61 @@ export function classificationRoutes(deps: ClassificationDeps) {
             );
 
             const bedrockMs = Date.now() - bedrockStart;
-            console.log(`[classification] [${i + 1}/${unclassified.length}] Bedrock responded in ${bedrockMs}ms → pipeline=${result.pipeline}, confidence=${result.confidence}`);
+            console.log(`[classification] [${i + 1}/${unclassified.length}] Bedrock responded in ${bedrockMs}ms → category=${result.category}, confidence=${result.confidence}`);
 
-            const previousPipeline = contact.pipeline ?? "uncategorized";
+            const previousCategory = contact.category ?? "uncategorized";
 
             // Update contact (also clears needs_classification)
             await deps.contacts.updateClassification(contact.id, {
               aiSummary: result.summary || null,
-              pipeline: result.pipeline !== "uncategorized" ? result.pipeline : null,
+              category: result.category,
               aiConfidence: result.confidence || null,
+              isDecisionMaker: result.isDecisionMaker,
             });
 
-            // Update company pipeline if still uncategorized
-            // Don't propagate "connected" to company — company keeps sales/client
-            let pipelineChanged = false;
+            // Always sync category to company + all sibling contacts
+            let categoryChanged = false;
             if (
               contact.company_id &&
-              result.pipeline !== "uncategorized" &&
-              result.pipeline !== "connected" &&
+              result.category !== "uncategorized" &&
               result.confidence !== "low"
             ) {
-              const company = await deps.companies.findById(contact.company_id);
-              if (company && company.pipeline === "uncategorized") {
-                await deps.companies.update(contact.company_id, {
-                  pipeline: result.pipeline,
-                });
-                pipelineChanged = true;
-              }
+              await deps.companies.update(contact.company_id, {
+                category: result.category,
+              });
+              await deps.contacts.updateCategoryByCompanyId(contact.company_id, result.category);
+              categoryChanged = true;
+              // Cache for subsequent contacts at this company
+              companyCategoryCache.set(contact.company_id, result.category);
             }
 
             // Write classification log
             await deps.classificationLogs.create({
               contactId: contact.id,
               runId: run.id,
-              pipelineAssigned: result.pipeline,
-              previousPipeline,
+              categoryAssigned: result.category,
+              previousCategory,
               aiSummary: result.summary,
               confidence: result.confidence,
             });
 
-            await deps.classificationRuns.incrementProcessed(run.id, pipelineChanged);
+            await deps.classificationRuns.incrementProcessed(run.id, categoryChanged);
+
+            // Trigger Pass 2 LinkedIn enrichment for high-value contacts (fire-and-forget)
+            if (shouldEnrichForCategory(result.category) && !contact.linkedin_url) {
+              const canvasClient = createCanvasClient(deps.config);
+              if (canvasClient && anthropic) {
+                enrichContactLinkedin(contact.id, {
+                  contacts: deps.contacts,
+                  companies: deps.companies,
+                  dedupCandidates: deps.dedupCandidates,
+                  canvas: canvasClient,
+                  anthropic,
+                }).catch((err) => {
+                  console.error(`[classification] LinkedIn enrichment failed for ${contactLabel}:`, err);
+                });
+              }
+            }
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`[classification] [${i + 1}/${unclassified.length}] FAILED ${contactLabel}: ${errMsg}`);
@@ -198,6 +265,21 @@ export function classificationRoutes(deps: ClassificationDeps) {
           console.log(`[classification] Tier 3 dedup finished`);
           } catch (err) {
             console.error("[classification] Tier 3 dedup failed:", err);
+          }
+
+          // Run cross-source dedup Pass 1 (DB-only batch matching, free)
+          if (!signal.aborted) {
+            console.log(`[classification] Starting cross-source dedup (Pass 1: DB match)...`);
+            try {
+              await crossSourceDbMatch({
+                contacts: deps.contacts,
+                companies: deps.companies,
+                dedupCandidates: deps.dedupCandidates,
+              });
+              console.log(`[classification] Cross-source dedup (Pass 1) finished`);
+            } catch (err) {
+              console.error("[classification] Cross-source dedup (Pass 1) failed:", err);
+            }
           }
         } else {
           console.log(`[classification] Skipping dedup (cancelled)`);
@@ -244,7 +326,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
         status: r.status,
         totalContacts: r.total_contacts,
         processedContacts: r.processed_contacts,
-        pipelineChanges: r.pipeline_changes,
+        categoryChanges: r.category_changes,
         errors: r.errors,
         startedAt: r.started_at,
         completedAt: r.completed_at,
@@ -267,7 +349,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
         status: run.status,
         totalContacts: run.total_contacts,
         processedContacts: run.processed_contacts,
-        pipelineChanges: run.pipeline_changes,
+        categoryChanges: run.category_changes,
         errors: run.errors,
         startedAt: run.started_at,
         completedAt: run.completed_at,
@@ -277,8 +359,8 @@ export function classificationRoutes(deps: ClassificationDeps) {
         contactId: l.contact_id,
         contactName: l.contact_name,
         companyName: l.company_name,
-        pipelineAssigned: l.pipeline_assigned,
-        previousPipeline: l.previous_pipeline,
+        categoryAssigned: l.category_assigned,
+        previousCategory: l.previous_category,
         aiSummary: l.ai_summary,
         confidence: l.confidence,
         createdAt: l.created_at,
@@ -302,7 +384,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
         status: run.status,
         totalContacts: run.total_contacts,
         processedContacts: run.processed_contacts,
-        pipelineChanges: run.pipeline_changes,
+        categoryChanges: run.category_changes,
         errors: run.errors,
         startedAt: run.started_at,
         completedAt: run.completed_at,
@@ -312,8 +394,8 @@ export function classificationRoutes(deps: ClassificationDeps) {
         contactId: l.contact_id,
         contactName: l.contact_name,
         companyName: l.company_name,
-        pipelineAssigned: l.pipeline_assigned,
-        previousPipeline: l.previous_pipeline,
+        categoryAssigned: l.category_assigned,
+        previousCategory: l.previous_category,
         aiSummary: l.ai_summary,
         confidence: l.confidence,
         createdAt: l.created_at,
@@ -335,8 +417,8 @@ export function classificationRoutes(deps: ClassificationDeps) {
       logs: logs.map((l) => ({
         id: l.id,
         contactId: l.contact_id,
-        pipelineAssigned: l.pipeline_assigned,
-        previousPipeline: l.previous_pipeline,
+        categoryAssigned: l.category_assigned,
+        previousCategory: l.previous_category,
         aiSummary: l.ai_summary,
         confidence: l.confidence,
         createdAt: l.created_at,
@@ -425,25 +507,63 @@ export function classificationRoutes(deps: ClassificationDeps) {
 
     await deps.contacts.updateClassification(contact.id, {
       aiSummary: result.summary || null,
-      pipeline: result.pipeline !== "uncategorized" ? result.pipeline : null,
+      category: result.category,
       aiConfidence: result.confidence || null,
+      isDecisionMaker: result.isDecisionMaker,
     });
 
+    // Always sync category to company + all sibling contacts
     if (
       contact.company_id &&
-      result.pipeline !== "uncategorized" &&
-      result.pipeline !== "connected" &&
+      result.category !== "uncategorized" &&
       result.confidence !== "low"
     ) {
-      const company = await deps.companies.findById(contact.company_id);
-      if (company && company.pipeline === "uncategorized") {
-        await deps.companies.update(contact.company_id, {
-          pipeline: result.pipeline,
-        });
-      }
+      await deps.companies.update(contact.company_id, {
+        category: result.category,
+      });
+      await deps.contacts.updateCategoryByCompanyId(contact.company_id, result.category);
     }
 
     return c.json({ result });
+  });
+
+  // ── Review queue endpoints ──
+
+  // GET /contacts/needs-review
+  routes.get("/contacts/needs-review", async (c) => {
+    const limit = Number(c.req.query("limit") ?? 50);
+    const offset = Number(c.req.query("offset") ?? 0);
+    const rows = await deps.contacts.findNeedsReview(limit, offset);
+    return c.json({
+      contacts: rows.map((r) => ({
+        ...mapRow(r),
+        companyName: r.company_name,
+      })),
+    });
+  });
+
+  // GET /contacts/needs-review/count
+  routes.get("/contacts/needs-review/count", async (c) => {
+    const count = await deps.contacts.countNeedsReview();
+    return c.json({ count });
+  });
+
+  // POST /contacts/:id/confirm-classification
+  routes.post("/contacts/:id/confirm-classification", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ category: string }>();
+    if (!body.category) {
+      return c.json({ error: { code: "VALIDATION_ERROR", message: "category is required" } }, 400);
+    }
+    const updated = await deps.contacts.confirmClassification(id, body.category);
+
+    // Auto-sync category to company + all sibling contacts
+    if (updated.company_id) {
+      await deps.companies.update(updated.company_id, { category: body.category });
+      await deps.contacts.updateCategoryByCompanyId(updated.company_id, body.category);
+    }
+
+    return c.json({ contact: mapRow(updated) });
   });
 
   return routes;

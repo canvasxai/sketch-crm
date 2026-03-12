@@ -1,8 +1,8 @@
 import { useState, useMemo } from "react";
 import { createRoute } from "@tanstack/react-router";
 import {
-  type CompanyPipeline,
-  COMPANY_PIPELINES,
+  type CompanyCategory,
+  COMPANY_CATEGORIES,
   type Contact,
   type Company,
   type PipelineWithStages,
@@ -32,7 +32,7 @@ import { ProductFlags } from "@/components/product-flags";
 import { MultiFilterPopover } from "@/components/multi-filter-popover";
 import { ResizableDrawerWrapper } from "@/components/resizable-drawer-wrapper";
 import { CompanyDetailDrawer } from "@/components/company-detail-drawer";
-import { ContactDetailDrawer } from "@/routes/contacts";
+import { ContactDetailDrawer } from "@/components/contact-detail-drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -66,26 +66,26 @@ export const pipelineRoute = createRoute({
 
 // ── Pipeline config ──
 
-/** Default visible pipelines — muted is hidden unless toggled on */
-const DEFAULT_PIPELINES: CompanyPipeline[] = ["uncategorized", "sales", "client", "hiring"];
-const ALL_PIPELINES: readonly CompanyPipeline[] = COMPANY_PIPELINES;
+/** Default visible categories — muted is hidden unless toggled on */
+const DEFAULT_CATEGORIES: CompanyCategory[] = ["uncategorized", "sales", "client", "hiring", "contractors"];
+const ALL_CATEGORIES: readonly CompanyCategory[] = COMPANY_CATEGORIES;
 
-const pipelineColors: Record<CompanyPipeline, string> = {
+const categoryColors: Record<CompanyCategory, string> = {
   uncategorized: "bg-gray-400",
   sales: "bg-blue-500",
   client: "bg-green-500",
-  connected: "bg-cyan-500",
   muted: "bg-gray-300",
   hiring: "bg-purple-500",
+  contractors: "bg-orange-500",
 };
 
-const pipelineLabels: Record<CompanyPipeline, string> = {
+const categoryLabels: Record<CompanyCategory, string> = {
   uncategorized: "Uncategorized",
   sales: "Sales",
   client: "Client",
-  connected: "Connected",
   muted: "Muted",
   hiring: "Hiring",
+  contractors: "Contractors",
 };
 
 // ── Company card model ──
@@ -94,7 +94,7 @@ interface PipelineCard {
   companyId: string;
   companyName: string;
   company: Company | null;      // null for demo cards
-  pipeline: CompanyPipeline;
+  pipeline: CompanyCategory;
   contacts: Contact[];
   primaryContact: { name: string; title: string | null };
   extraCount: number;           // "+N more"
@@ -160,7 +160,7 @@ function PipelinePage() {
   const [productFilters, setProductFilters] = useState<Set<string>>(new Set());
   const [showMuted, setShowMuted] = useState(false);
 
-  const visiblePipelines = showMuted ? ALL_PIPELINES : DEFAULT_PIPELINES;
+  const visiblePipelines = showMuted ? ALL_CATEGORIES : DEFAULT_CATEGORIES;
 
   // ── Queries ──
   const { data: contactsData, isLoading: contactsLoading } = useContacts({ limit: 500 });
@@ -197,10 +197,10 @@ function PipelinePage() {
 
     const cards: PipelineCard[] = [];
 
-    // Company cards — use company.pipeline for the Kanban column
+    // Company cards — use company.category for the Kanban column
     for (const [companyId, contacts] of byCompany) {
       const company = companyMap.get(companyId) ?? null;
-      const companyPipeline: CompanyPipeline = company?.pipeline ?? "uncategorized";
+      const companyPipeline: CompanyCategory = company?.category ?? "uncategorized";
       const primary = contacts[0];
       const ownerIds = [...new Set(contacts.map((c) => c.createdByUserId).filter(Boolean))] as string[];
 
@@ -267,7 +267,7 @@ function PipelinePage() {
   // ── Group cards by pipeline ──
   const grouped = useMemo(() => {
     const map: Record<string, PipelineCard[]> = {};
-    for (const p of ALL_PIPELINES) {
+    for (const p of ALL_CATEGORIES) {
       map[p] = [];
     }
     for (const card of activeCards) {
@@ -313,7 +313,7 @@ function PipelinePage() {
         <div className="px-6 pt-6">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-xl font-bold">Pipeline</h1>
+              <h1 className="text-xl font-bold">Categories</h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 Track companies through your sales funnel.
               </p>
@@ -325,7 +325,7 @@ function PipelinePage() {
           </div>
         </div>
         <div className="flex gap-4 px-6 py-6">
-          {DEFAULT_PIPELINES.map((p) => (
+          {DEFAULT_CATEGORIES.map((p) => (
             <div key={p} className="flex flex-1 flex-col">
               <Skeleton className="h-6 w-32 mb-3" />
               <div className="space-y-2">
@@ -344,7 +344,7 @@ function PipelinePage() {
       <div className="px-6 pt-6">
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-xl font-bold">Pipeline</h1>
+            <h1 className="text-xl font-bold">Categories</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Track companies through your sales funnel.
             </p>
@@ -402,7 +402,7 @@ function PipelinePage() {
             <TabsList className="w-full">
               {visiblePipelines.map((p) => (
                 <TabsTrigger key={p} value={p} className="text-xs">
-                  {pipelineLabels[p]} ({grouped[p].length})
+                  {categoryLabels[p]} ({grouped[p].length})
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -426,8 +426,8 @@ function PipelinePage() {
             <div key={p} className="flex flex-1 flex-col min-w-0">
               {/* Column header */}
               <div className="flex items-center gap-2 mb-3 px-1">
-                <div className={cn("size-2 rounded-full", pipelineColors[p])} />
-                <span className="text-sm font-medium">{pipelineLabels[p]}</span>
+                <div className={cn("size-2 rounded-full", categoryColors[p])} />
+                <span className="text-sm font-medium">{categoryLabels[p]}</span>
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-auto">
                   {grouped[p].length}
                 </Badge>

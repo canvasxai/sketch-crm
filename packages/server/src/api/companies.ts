@@ -7,7 +7,7 @@ import { mapRow, mapRows } from "../lib/map-row.js";
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 
-const pipelineEnum = z.enum(["uncategorized", "sales", "client", "connected", "muted", "hiring"]);
+const categoryEnum = z.enum(["uncategorized", "sales", "client", "muted", "hiring", "contractors"]);
 
 const createSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -21,7 +21,7 @@ const createSchema = z.object({
   description: z.string().optional(),
   techStack: z.string().optional(),
   fundingStage: z.string().optional(),
-  pipeline: pipelineEnum.optional(),
+  category: categoryEnum.optional(),
 });
 
 const updateSchema = z.object({
@@ -36,23 +36,21 @@ const updateSchema = z.object({
   description: z.string().nullable().optional(),
   techStack: z.string().nullable().optional(),
   fundingStage: z.string().nullable().optional(),
-  pipeline: pipelineEnum.optional(),
-  /** When true and pipeline is changing, also update all contacts of this company */
-  propagateToContacts: z.boolean().optional(),
+  category: categoryEnum.optional(),
 });
 
 export function companiesRoutes(repo: CompaniesRepo, contacts?: ContactsRepo) {
   const routes = new Hono();
 
-  // List companies with search, pipeline filter, pagination
+  // List companies with search, category filter, pagination
   routes.get("/", async (c) => {
     const search = c.req.query("search");
-    const pipeline = c.req.query("pipeline");
+    const category = c.req.query("category");
     const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
     const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
 
     const [companies, total] = await Promise.all([
-      repo.list({ search, pipeline, limit, offset }),
+      repo.list({ search, category, limit, offset }),
       repo.count({ search }),
     ]);
 
@@ -157,16 +155,13 @@ export function companiesRoutes(repo: CompaniesRepo, contacts?: ContactsRepo) {
       );
     }
 
-    // Extract propagateToContacts before passing to repo (it's not a company column)
-    const { propagateToContacts, ...companyData } = parsed.data;
+    const company = await repo.update(id, parsed.data);
 
-    const company = await repo.update(id, companyData);
-
-    // Propagate pipeline to all contacts of this company
+    // Always sync category to all contacts of this company
     let contactsUpdated = 0;
-    if (propagateToContacts && companyData.pipeline && contacts) {
-      contactsUpdated = await contacts.updatePipelineByCompanyId(id, companyData.pipeline);
-      console.log(`[companies] Propagated pipeline "${companyData.pipeline}" to ${contactsUpdated} contacts of company ${id}`);
+    if (parsed.data.category && contacts) {
+      contactsUpdated = await contacts.updateCategoryByCompanyId(id, parsed.data.category);
+      console.log(`[companies] Synced category "${parsed.data.category}" to ${contactsUpdated} contacts of company ${id}`);
     }
 
     return c.json({ company: mapRow(company), contactsUpdated });

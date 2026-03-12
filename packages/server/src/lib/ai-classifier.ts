@@ -4,22 +4,25 @@
  */
 
 import type AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
+import { stripMarkdownFences } from "./dedup.js";
 
 const MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
-const CLASSIFICATION_PROMPT = `You are a CRM assistant for a B2B services/SaaS company. Given a contact's information and their recent communication history, classify them into one of these pipelines:
+const CLASSIFICATION_PROMPT = `You are a CRM assistant for a B2B services/SaaS company. Given a contact's information and their recent communication history, classify them into one of these categories:
 
-- "sales" — Active sales prospect. Someone we are selling to or trying to sell to. Includes warm leads, demo requests, pricing discussions, proposal conversations. This is the primary business contact driving the deal.
-- "client" — Existing customer or client. Someone who has already purchased or is using our services/products. Includes support conversations, account management, renewals. This is the primary relationship contact.
-- "connected" — A contact at a company we're already engaging with who isn't the primary relationship driver. Developers, operations, finance, legal, IT, or other team members at a sales prospect or client company. They are relevant but not the main sales/client contact.
+- "sales" — Active sales prospect or contact at a company we are selling to. Includes warm leads, demo requests, pricing discussions, and other team members at prospect companies.
+- "client" — Existing customer/client or contact at a company using our services/products. Includes primary relationship contacts, support, account management, and other team members at client companies.
 - "hiring" — Job candidate or hiring-related contact. Someone applying for a role, being recruited, or involved in hiring discussions.
 - "muted" — Irrelevant contact. Newsletters, automated emails, vendors trying to sell to US, spam, cold outreach from others, transactional notifications.
+- "contractors" — Vendor, service provider, or contractor providing services TO our company. Includes accountants, banks, lawyers, designers, freelancers, IT providers, consultants.
 - "uncategorized" — Not enough information to classify. Only use this if there is truly insufficient signal.
 
-Also generate a brief summary (1-2 sentences) describing the relationship context. For sales/client contacts, focus on what's being discussed, deal stage, or product interest. For connected contacts, describe their role and how they relate to the primary engagement. For hiring contacts, mention the role. For muted contacts, explain why they're irrelevant. For uncategorized, say what little is known.
+Also determine if this person is a **decision maker** — the primary relationship driver at their company. Decision makers are the main business contacts driving deals or owning the client relationship (e.g., buyers, account owners, executives with purchasing authority). Non-decision-makers are developers, operations, finance, legal, IT, or other team members who are relevant but not the primary contact.
+
+Also generate a brief summary (1-2 sentences) describing the relationship context.
 
 Respond with ONLY a JSON object:
-{ "pipeline": "sales"|"client"|"connected"|"hiring"|"muted"|"uncategorized", "summary": "<1-2 sentence context>", "confidence": "high"|"medium"|"low" }`;
+{ "category": "sales"|"client"|"hiring"|"muted"|"contractors"|"uncategorized", "isDecisionMaker": true|false, "summary": "<1-2 sentence context>", "confidence": "high"|"medium"|"low" }`;
 
 interface EmailContext {
   subject: string;
@@ -35,7 +38,8 @@ interface MessageContext {
 }
 
 export interface ClassificationResult {
-  pipeline: string;
+  category: string;
+  isDecisionMaker: boolean;
   summary: string;
   confidence: string;
 }
@@ -98,29 +102,36 @@ export async function classifyContact(
         ? response.content[0].text.trim()
         : "";
 
-    // Strip markdown code fences if the model wraps its response in ```json ... ```
-    text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    // Strip markdown code fences if the model wraps its response
+    text = stripMarkdownFences(text);
 
     const parsed = JSON.parse(text) as ClassificationResult;
 
-    // Validate pipeline value
-    const validPipelines = [
+    // Validate category value (also accept legacy "pipeline" key from AI)
+    if (!parsed.category && (parsed as any).pipeline) {
+      parsed.category = (parsed as any).pipeline;
+    }
+    const validCategories = [
       "sales",
       "client",
-      "connected",
       "hiring",
       "muted",
+      "contractors",
       "uncategorized",
     ];
-    if (!validPipelines.includes(parsed.pipeline)) {
-      parsed.pipeline = "uncategorized";
+    if (!validCategories.includes(parsed.category)) {
+      parsed.category = "uncategorized";
     }
+
+    // Ensure isDecisionMaker is a boolean
+    parsed.isDecisionMaker = parsed.isDecisionMaker === true;
 
     return parsed;
   } catch (err) {
     console.warn("[ai-classifier] Classification failed:", err);
     return {
-      pipeline: "uncategorized",
+      category: "uncategorized",
+      isDecisionMaker: false,
       summary: "",
       confidence: "low",
     };

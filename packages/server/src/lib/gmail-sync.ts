@@ -19,7 +19,7 @@ const BATCH_SIZE = 50;
 const MAX_CONCURRENT_FETCHES = 10;
 const MAX_BODY_LENGTH = 50_000;
 
-type SyncPeriod = "1month" | "3months" | "6months" | "1year" | "all";
+type SyncPeriod = "5days" | "1month" | "3months" | "6months" | "1year" | "all";
 
 interface SyncDeps {
   users: ReturnType<typeof createUsersRepository>;
@@ -111,6 +111,7 @@ function buildDateQuery(syncPeriod: SyncPeriod): string {
   if (syncPeriod === "all") return "";
 
   const ms: Record<string, number> = {
+    "5days": 5,
     "1month": 30,
     "3months": 90,
     "6months": 180,
@@ -210,8 +211,13 @@ export async function syncGmailEmails(
   });
 
   try {
-    // Load domain filters
-    const internalDomains = await deps.orgSettings.getInternalDomains();
+    // Load domain filters — always include the user's own email domain
+    const configuredInternalDomains = await deps.orgSettings.getInternalDomains();
+    const userDomain = extractDomain(userEmail);
+    const internalDomains =
+      userDomain && !configuredInternalDomains.includes(userDomain)
+        ? [...configuredInternalDomains, userDomain]
+        : configuredInternalDomains;
     const mutedDomains = await deps.mutedDomains.getDomainList();
 
     const query = buildDateQuery(syncPeriod);
@@ -381,6 +387,7 @@ async function processMessage(
       // No email match — try Tier 2 (name + company domain) before creating
       const name = extractDisplayName(participantEmail, allParticipants, message);
       let companyId: string | null = null;
+      let companyCategory: string | null = null;
       const domain = extractDomain(participantEmail);
 
       if (domain && !isPersonalEmailDomain(domain)) {
@@ -390,6 +397,7 @@ async function processMessage(
           source: "email_domain",
         });
         companyId = company.id;
+        companyCategory = company.category ?? null;
         const timeDiff = Date.now() - new Date(company.created_at).getTime();
         if (timeDiff < 5000) {
           result.companiesCreated++;
@@ -429,6 +437,13 @@ async function processMessage(
         });
         contactId = contact.id;
         result.contactsCreated++;
+
+        // Inherit company category if already classified
+        if (companyCategory && companyCategory !== "uncategorized") {
+          await deps.contacts.updateClassification(contactId, {
+            category: companyCategory,
+          });
+        }
       }
     }
 

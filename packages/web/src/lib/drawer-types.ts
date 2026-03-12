@@ -1,4 +1,4 @@
-import type { CompanyPipeline } from "@crm/shared";
+import type { CompanyCategory } from "@crm/shared";
 
 // ── Timeline event types ──
 
@@ -147,22 +147,22 @@ export const sourceLabels: Record<string, string> = {
   gmail: "Gmail",
 };
 
-// ── Pipeline style map (for CompanyPipeline) ──
+// ── Category style map (for CompanyCategory) ──
 
-export const PIPELINE_STYLES: Record<CompanyPipeline, string> = {
+export const CATEGORY_STYLES: Record<CompanyCategory, string> = {
   uncategorized: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
   sales: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   client: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  connected: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
   muted: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
   hiring: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  contractors: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
 };
 
-export const PIPELINE_LABELS: Record<CompanyPipeline, string> = {
+export const CATEGORY_LABELS: Record<CompanyCategory, string> = {
   uncategorized: "Uncategorized",
   sales: "Sales",
   client: "Client",
-  connected: "Connected",
   muted: "Muted",
   hiring: "Hiring",
+  contractors: "Contractors",
 };

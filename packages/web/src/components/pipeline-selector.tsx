@@ -1,49 +1,46 @@
 import { useState } from "react";
-import type { CompanyPipeline } from "@crm/shared";
+import type { CompanyCategory } from "@crm/shared";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { PipelineBadge } from "@/components/funnel-stage-badge";
+import { CategoryBadge } from "@/components/funnel-stage-badge";
 import { Check } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 
-const PIPELINE_OPTIONS: Array<{
+const CATEGORY_OPTIONS: Array<{
   value: string;
   label: string;
   dot: string;
 }> = [
   { value: "sales", label: "Sales", dot: "bg-blue-500" },
   { value: "client", label: "Client", dot: "bg-green-500" },
-  { value: "connected", label: "Connected", dot: "bg-cyan-500" },
   { value: "hiring", label: "Hiring", dot: "bg-purple-500" },
+  { value: "contractors", label: "Contractors", dot: "bg-orange-500" },
   { value: "muted", label: "Muted", dot: "bg-gray-400" },
   { value: "uncategorized", label: "Uncategorized", dot: "bg-gray-300" },
 ];
 
-interface PipelineSelectorProps {
+interface CategorySelectorProps {
   value: string | null;
-  /** Filter to only these pipeline values */
+  /** Filter to only these category values */
   options?: readonly string[];
-  /** Show a "Clear" option to set pipeline to null */
-  allowClear?: boolean;
-  onChange: (pipeline: string | null) => void;
+  onChange: (category: string | null) => void;
   disabled?: boolean;
 }
 
-export function PipelineSelector({
+export function CategorySelector({
   value,
   options,
-  allowClear,
   onChange,
   disabled,
-}: PipelineSelectorProps) {
+}: CategorySelectorProps) {
   const [open, setOpen] = useState(false);
 
   const filtered = options
-    ? PIPELINE_OPTIONS.filter((o) => options.includes(o.value))
-    : PIPELINE_OPTIONS;
+    ? CATEGORY_OPTIONS.filter((o) => options.includes(o.value))
+    : CATEGORY_OPTIONS;
 
   function handleSelect(newValue: string | null) {
     onChange(newValue);
@@ -59,7 +56,7 @@ export function PipelineSelector({
           onClick={(e) => e.stopPropagation()}
         >
           {value ? (
-            <PipelineBadge pipeline={value as CompanyPipeline} />
+            <CategoryBadge pipeline={value as CompanyCategory} />
           ) : (
             <span className="text-xs text-muted-foreground">—</span>
           )}
@@ -70,20 +67,6 @@ export function PipelineSelector({
         align="start"
         onClick={(e) => e.stopPropagation()}
       >
-        {allowClear && (
-          <button
-            type="button"
-            className={cn(
-              "flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted transition-colors",
-              value === null && "font-medium",
-            )}
-            onClick={() => handleSelect(null)}
-          >
-            <span className="size-2 rounded-full bg-transparent border border-muted-foreground/30" />
-            <span className="flex-1 text-left">Inherited</span>
-            {value === null && <Check size={12} />}
-          </button>
-        )}
         {filtered.map((opt) => (
           <button
             key={opt.value}
@@ -103,3 +86,6 @@ export function PipelineSelector({
     </Popover>
   );
 }
+
+// Legacy export for backward compatibility
+export { CategorySelector as PipelineSelector };

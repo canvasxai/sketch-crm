@@ -1,9 +1,9 @@
-import type { CompanyPipeline } from "@crm/shared";
+import type { CompanyCategory } from "@crm/shared";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-const pipelineConfig: Record<CompanyPipeline, { label: string; className: string }> = {
+const categoryConfig: Record<CompanyCategory, { label: string; className: string }> = {
   uncategorized: {
     label: "Uncategorized",
     className: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
@@ -16,10 +16,6 @@ const pipelineConfig: Record<CompanyPipeline, { label: string; className: string
     label: "Client",
     className: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
   },
-  connected: {
-    label: "Connected",
-    className: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
-  },
   muted: {
     label: "Muted",
     className: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
@@ -28,14 +24,18 @@ const pipelineConfig: Record<CompanyPipeline, { label: string; className: string
     label: "Hiring",
     className: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   },
+  contractors: {
+    label: "Contractors",
+    className: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+  },
 };
 
-interface PipelineBadgeProps {
-  pipeline: CompanyPipeline;
+interface CategoryBadgeProps {
+  pipeline: CompanyCategory;
 }
 
-export function PipelineBadge({ pipeline }: PipelineBadgeProps) {
-  const config = pipelineConfig[pipeline];
+export function CategoryBadge({ pipeline }: CategoryBadgeProps) {
+  const config = categoryConfig[pipeline];
 
   if (!config) {
     return (
@@ -61,5 +61,5 @@ export function PipelineBadge({ pipeline }: PipelineBadgeProps) {
   );
 }
 
-// Keep legacy export name for easy migration
-export { PipelineBadge as FunnelStageBadge };
+// Keep legacy export names for easy migration
+export { CategoryBadge as PipelineBadge, CategoryBadge as FunnelStageBadge };

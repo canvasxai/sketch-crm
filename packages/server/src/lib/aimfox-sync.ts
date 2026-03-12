@@ -27,7 +27,28 @@ function buildLinkedinUrl(publicIdentifier: string): string {
 }
 
 /**
+ * Strip common corporate suffixes from a company name for fuzzy matching.
+ */
+function normalizeCompanyName(name: string): string {
+  return name
+    .replace(/\b(Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.?|Group|Holdings|PLC|GmbH|S\.?A\.?|AG)\b/gi, "")
+    .replace(/[.,]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Guess the most likely domain from a company name.
+ * e.g. "Acme Corp" → "acme.com", "My Company Inc." → "mycompany.com"
+ */
+function guessCompanyDomain(name: string): string {
+  return normalizeCompanyName(name).replace(/\s+/g, "") + ".com";
+}
+
+/**
  * Extract company info from AimFox lead profile and find/create in CRM.
+ * Uses a multi-step resolution strategy to bridge LinkedIn company names
+ * to existing companies that may have been created from email domains.
  */
 async function resolveCompany(
   lead: AimfoxLead,
@@ -41,19 +62,50 @@ async function resolveCompany(
     ? `https://www.linkedin.com/company/${currentExp.company.universal_name}`
     : null;
 
-  // Try to find by LinkedIn URL first (most reliable)
+  // Step 1: Try to find by LinkedIn universal_name (most reliable)
   if (linkedinUrl) {
     const existing = await companies.search(currentExp.company.universal_name, 1);
     if (existing.length > 0) return existing[0].id;
   }
 
-  // Try to find by name
+  // Step 2: Try exact name match
   const byName = await companies.search(companyName, 1);
   if (byName.length > 0 && byName[0].name.toLowerCase() === companyName.toLowerCase()) {
+    // Fill in LinkedIn URL on the existing company if missing
+    if (linkedinUrl && !byName[0].linkedin_url) {
+      await companies.update(byName[0].id, { linkedinUrl });
+    }
     return byName[0].id;
   }
 
-  // Create new company
+  // Step 3: Try normalized name match (strip "Inc.", "Corp.", etc.)
+  const normalized = normalizeCompanyName(companyName);
+  if (normalized) {
+    const byNormalized = await companies.search(normalized, 5);
+    for (const candidate of byNormalized) {
+      if (normalizeCompanyName(candidate.name) === normalized) {
+        if (linkedinUrl && !candidate.linkedin_url) {
+          await companies.update(candidate.id, { linkedinUrl });
+        }
+        return candidate.id;
+      }
+    }
+  }
+
+  // Step 4: Try domain-based matching — guess domain from LinkedIn company name
+  // This bridges "Acme Corp" (LinkedIn) → "acme.com" (from email ingestion)
+  const guessedDomain = guessCompanyDomain(companyName);
+  if (guessedDomain) {
+    const byDomain = await companies.findByDomain(guessedDomain);
+    if (byDomain) {
+      if (linkedinUrl && !byDomain.linkedin_url) {
+        await companies.update(byDomain.id, { linkedinUrl });
+      }
+      return byDomain.id;
+    }
+  }
+
+  // Step 5: No match — create new company
   const created = await companies.create({
     name: companyName,
     linkedinUrl: linkedinUrl ?? undefined,
@@ -146,6 +198,14 @@ export async function processConnectionAccept(
     await deps.aimfoxSyncState.incrementCounters({ contacts: 1 });
     if (companyId) {
       await deps.aimfoxSyncState.incrementCounters({ companies: 1 });
+
+      // Inherit company category if already classified
+      const company = await deps.companies.findById(companyId);
+      if (company?.category && company.category !== "uncategorized") {
+        await deps.contacts.updateClassification(contact.id, {
+          category: company.category,
+        });
+      }
     }
   } else {
     // Update existing contact with enriched data
@@ -334,6 +394,17 @@ export async function backfillAimfoxLeads(
               aimfoxProfileData: richProfile,
             });
             contactsCreated++;
+
+            // Inherit company category if already classified
+            if (companyId) {
+              const company = await deps.companies.findById(companyId);
+              if (company?.category && company.category !== "uncategorized") {
+                await deps.contacts.updateClassification(contact.id, {
+                  category: company.category,
+                });
+              }
+            }
+
             // Assign the triggering user as owner
             if (options?.ownerId) {
               await deps.contacts.addOwner(contact.id, options.ownerId);
@@ -349,10 +420,16 @@ export async function backfillAimfoxLeads(
             }
           }
 
-          // Optionally sync conversation
-          if (options?.syncConversations && contact) {
+          // Always sync conversation — messages are essential for classification
+          if (contact) {
             try {
-              await syncConversation(contact.id, lead.id, deps);
+              const convResult = await syncConversation(contact.id, lead.id, deps);
+              // If no messages were synced, clear needs_classification — AI has nothing to work with
+              if (convResult.synced === 0) {
+                await deps.contacts.updateClassification(contact.id, {
+                  category: "uncategorized",
+                });
+              }
             } catch {
               // Conversation sync failure is non-fatal
             }
@@ -364,8 +441,8 @@ export async function backfillAimfoxLeads(
           processed++;
         }
 
-        // Rate limit protection
-        await new Promise((r) => setTimeout(r, 500));
+        // Rate limit protection (AimFox API calls already provide natural throttling)
+        await new Promise((r) => setTimeout(r, 100));
       }
 
       cursor += result.leads.length;

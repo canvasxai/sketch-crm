@@ -1,10 +1,18 @@
-// ── Company pipeline classifications ──
-export const COMPANY_PIPELINES = ["uncategorized", "sales", "client", "connected", "muted", "hiring"] as const;
-export type CompanyPipeline = (typeof COMPANY_PIPELINES)[number];
+// ── Company category classifications ──
+export const COMPANY_CATEGORIES = ["uncategorized", "sales", "client", "muted", "hiring", "contractors"] as const;
+export type CompanyCategory = (typeof COMPANY_CATEGORIES)[number];
 
-// ── Contact pipeline (AI-assigned classification) ──
-export const CONTACT_PIPELINES = ["sales", "client", "connected", "muted", "hiring"] as const;
-export type ContactPipeline = (typeof CONTACT_PIPELINES)[number];
+// Legacy aliases (Sense A rename: pipeline → category)
+export const COMPANY_PIPELINES = COMPANY_CATEGORIES;
+export type CompanyPipeline = CompanyCategory;
+
+// ── Contact category (AI-assigned classification) ──
+export const CONTACT_CATEGORIES = ["sales", "client", "muted", "hiring", "contractors"] as const;
+export type ContactCategory = (typeof CONTACT_CATEGORIES)[number];
+
+// Legacy aliases
+export const CONTACT_PIPELINES = CONTACT_CATEGORIES;
+export type ContactPipeline = ContactCategory;
 
 // ── Pipeline stage types ──
 export const STAGE_TYPES = ["active", "won", "lost"] as const;
@@ -76,7 +84,7 @@ export interface Company {
   description: string | null;
   techStack: string | null;
   fundingStage: string | null;
-  pipeline: CompanyPipeline;
+  category: CompanyCategory;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,10 +116,11 @@ export interface Contact {
   linkedinUrl: string | null;
   companyId: string | null;
   source: ContactSource;
-  pipeline: ContactPipeline | null; // override — null = inherit from company
+  category: ContactCategory; // always in sync with company
   isCanvasUser: boolean;
   isSketchUser: boolean;
   usesServices: boolean;
+  isDecisionMaker: boolean;
   canvasSignupDate: string | null;
   visibility: ContactVisibility;
   createdByUserId: string | null;
@@ -120,6 +129,8 @@ export interface Contact {
   phones: ContactPhoneEntry[];
   needsClassification: boolean;
   aiConfidence: string | null;
+  aiSummary: string | null;
+  aiClassifiedAt: string | null;
   owners?: ContactOwner[];
   createdAt: string;
   updatedAt: string;
@@ -371,7 +382,7 @@ export interface ClassificationRun {
   status: "running" | "completed" | "failed" | "cancelled";
   totalContacts: number;
   processedContacts: number;
-  pipelineChanges: number;
+  categoryChanges: number;
   errors: number;
   startedAt: string;
   completedAt: string | null;
@@ -382,8 +393,8 @@ export interface ClassificationLogEntry {
   contactId: string;
   contactName?: string;
   companyName?: string | null;
-  pipelineAssigned: string | null;
-  previousPipeline: string | null;
+  categoryAssigned: string | null;
+  previousCategory: string | null;
   aiSummary: string | null;
   confidence: string | null;
   createdAt: string;

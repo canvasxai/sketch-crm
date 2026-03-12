@@ -1,7 +1,6 @@
 import {
-  ArrowsClockwise,
+  CircleDashed,
   CopySimple,
-  Sparkle,
   Warning,
 } from "@phosphor-icons/react";
 import {
@@ -15,20 +14,17 @@ import { cn } from "@/lib/utils";
 
 export type WorkflowStatus =
   | "dedup"
-  | "needs_review"
-  | "needs_reclassification"
   | "low_confidence"
+  | "needs_classification"
   | "ok";
 
 export function getWorkflowStatus(
-  contact: Pick<Contact, "id" | "needsClassification" | "pipeline" | "aiConfidence">,
+  contact: Pick<Contact, "id" | "aiConfidence" | "needsClassification">,
   dedupContactIds: Set<string>,
 ): WorkflowStatus {
   if (dedupContactIds.has(contact.id)) return "dedup";
-  if (contact.needsClassification && !contact.pipeline) return "needs_review";
-  if (contact.needsClassification && contact.pipeline) return "needs_reclassification";
-  if (!contact.needsClassification && contact.aiConfidence === "low")
-    return "low_confidence";
+  if (contact.aiConfidence === "low") return "low_confidence";
+  if (contact.needsClassification) return "needs_classification";
   return "ok";
 }
 
@@ -47,28 +43,22 @@ const statusConfig: Record<
     className: "text-orange-500",
     tooltip: "Possible duplicate",
   },
-  needs_review: {
-    icon: Sparkle,
-    weight: "fill",
-    className: "text-amber-500",
-    tooltip: "Needs classification",
-  },
-  needs_reclassification: {
-    icon: ArrowsClockwise,
-    weight: undefined,
-    className: "text-amber-400",
-    tooltip: "Needs re-classification",
-  },
   low_confidence: {
     icon: Warning,
     weight: undefined,
     className: "text-yellow-500",
     tooltip: "Low confidence — needs human review",
   },
+  needs_classification: {
+    icon: CircleDashed,
+    weight: undefined,
+    className: "text-blue-400",
+    tooltip: "Needs classification",
+  },
 };
 
 interface WorkflowStatusIconProps {
-  contact: Pick<Contact, "id" | "needsClassification" | "pipeline" | "aiConfidence">;
+  contact: Pick<Contact, "id" | "aiConfidence" | "needsClassification">;
   dedupContactIds: Set<string>;
   onClick?: (status: WorkflowStatus) => void;
 }
