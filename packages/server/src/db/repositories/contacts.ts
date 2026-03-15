@@ -558,9 +558,9 @@ export function createContactsRepository(db: Kysely<DB>) {
       return result.length > 0 ? Number(result[0].numDeletedRows) : 0;
     },
 
-    /** Transfer all related records (meetings, tasks, notes, opportunities) from one contact to another. */
+    /** Transfer all related records from one contact to another. */
     async transferRelatedRecords(fromContactId: string, toContactId: string) {
-      const tables = ["meetings", "tasks", "notes", "opportunities"] as const;
+      const tables = ["meetings", "tasks", "notes", "opportunities", "linkedin_messages", "emails"] as const;
       for (const table of tables) {
         await sql`UPDATE ${sql.table(table)} SET contact_id = ${toContactId} WHERE contact_id = ${fromContactId}`.execute(db);
       }

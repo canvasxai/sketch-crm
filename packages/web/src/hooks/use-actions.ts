@@ -6,9 +6,10 @@ export function useGenerateActions() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.actions.generate(),
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast.success("Action generation started");
       queryClient.invalidateQueries({ queryKey: ["action-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["action-pending"] });
     },
     onError: (error: Error) => {
       toast.error(error.message);
@@ -32,6 +33,25 @@ export function useGenerateContactActions() {
     },
     onError: (error: Error) => {
       toast.error(error.message);
+    },
+  });
+}
+
+export function useActionPending() {
+  return useQuery({
+    queryKey: ["action-pending"],
+    queryFn: () => api.actions.pending(),
+    staleTime: 60_000,
+  });
+}
+
+export function useLatestActionRun() {
+  return useQuery({
+    queryKey: ["action-runs", "latest"],
+    queryFn: () => api.actions.latestRun(),
+    select: (data) => data.run,
+    refetchInterval: (query) => {
+      return query.state.data?.run?.status === "running" ? 3000 : false;
     },
   });
 }
@@ -63,6 +83,7 @@ export function useCancelActionGeneration() {
     onSuccess: () => {
       toast.info("Action generation stopped");
       queryClient.invalidateQueries({ queryKey: ["action-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["action-pending"] });
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (error: Error) => {

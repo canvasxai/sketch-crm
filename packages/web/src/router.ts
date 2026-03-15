@@ -10,6 +10,7 @@ import { pipelineRoute } from "./routes/pipeline";
 import { rootRoute } from "./routes/root";
 import { settingsRoute } from "./routes/settings";
 import { teamRoute } from "./routes/team";
+import { todosRoute } from "./routes/todos";
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -19,6 +20,7 @@ const routeTree = rootRoute.addChildren([
     companyDetailRoute,
     contactDetailRoute,
     activitiesRoute,
+    todosRoute,
     teamRoute,
     integrationsRoute,
     settingsRoute,

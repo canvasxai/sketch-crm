@@ -371,15 +371,46 @@ export async function backfillAimfoxLeads(
             contact = await deps.contacts.findByAimfoxLeadId(lead.id);
           }
 
+          // Resolve company early (needed for dedup and creation)
+          let companyId: string | null = null;
           if (!contact) {
-            // Resolve company
-            let companyId: string | null = null;
+            // Tier 1: Try email match
+            const contactEmail = richProfile.email || richProfile.emails?.[0]?.address;
+            if (contactEmail) {
+              const emailMatch = await deps.contacts.findDuplicate({ email: contactEmail });
+              if (emailMatch) contact = emailMatch.contact;
+            }
+
             try {
               companyId = await resolveCompany(richProfile, deps.companies);
-              if (companyId) companiesCreated++;
             } catch {
               // Company resolution failure is non-fatal
             }
+
+            // Tier 2: Try name + company domain match
+            if (!contact && companyId) {
+              const company = await deps.companies.findById(companyId);
+              if (company?.domain) {
+                const domainMatch = await deps.contacts.findDuplicate({
+                  name: richProfile.full_name,
+                  companyDomain: company.domain,
+                });
+                if (domainMatch) contact = domainMatch.contact;
+              }
+            }
+
+            // Update matched contact with LinkedIn info if missing
+            if (contact && !contact.linkedin_url) {
+              await deps.contacts.update(contact.id, {
+                linkedinUrl,
+                aimfoxLeadId: lead.id,
+                aimfoxProfileData: richProfile,
+              });
+            }
+          }
+
+          if (!contact) {
+            if (companyId) companiesCreated++;
 
             contact = await deps.contacts.create({
               name: richProfile.full_name,

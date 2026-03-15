@@ -322,6 +322,7 @@ interface SourceStatusResponse {
     transcriptsSynced: number;
     meetingsCreated: number;
     contactsMatched: number;
+    syncFrequency: string;
     syncPeriod: string;
     oldestTranscriptAt: string | null;
     newestTranscriptAt: string | null;
@@ -716,6 +717,17 @@ export const api = {
     list(): Promise<UserListResponse> {
       return request<UserListResponse>("/api/users");
     },
+    create(body: { name: string; email: string; role?: string }): Promise<{ user: User }> {
+      return request<{ user: User }>("/api/users", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    remove(id: string): Promise<{ success: true }> {
+      return request<{ success: true }>(`/api/users/${id}`, {
+        method: "DELETE",
+      });
+    },
   },
 
   integrations: {
@@ -815,6 +827,12 @@ export const api = {
     cancelFirefliesSync(): Promise<{ success: true; wasRunning: boolean }> {
       return request("/api/integrations/fireflies/cancel", {
         method: "POST",
+      });
+    },
+    updateFirefliesSyncFrequency(body: { frequency: string }): Promise<{ success: true }> {
+      return request<{ success: true }>("/api/integrations/fireflies/sync-frequency", {
+        method: "PUT",
+        body: JSON.stringify(body),
       });
     },
   },
@@ -1106,6 +1124,9 @@ export const api = {
     },
     cancel(): Promise<{ success: true; wasRunning: boolean }> {
       return request("/api/actions/cancel", { method: "POST" });
+    },
+    pending(): Promise<{ count: number; totalCandidates: number }> {
+      return request("/api/actions/pending");
     },
   },
 

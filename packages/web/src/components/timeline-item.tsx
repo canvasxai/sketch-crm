@@ -146,6 +146,11 @@ export function TimelineItem({ entry, contactName }: TimelineItemProps) {
         return (
           <span className="text-sm text-muted-foreground mt-0.5">
             {task.title}
+            {task.origin === "crm_ai" && (
+              <Badge variant="secondary" className="ml-2 text-[10px] px-1.5 py-0 font-normal bg-violet-500/10 text-violet-600 border-0">
+                AI
+              </Badge>
+            )}
             {task.completed && (
               <Badge variant="outline" className="ml-2 text-[10px] px-1.5 py-0 font-normal">
                 Completed

@@ -68,6 +68,22 @@ export function createFirefliesSyncStateRepository(db: Kysely<DB>) {
       });
     },
 
+    async setSyncFrequency(frequency: string) {
+      const existing = await this.get();
+      if (existing) {
+        await db
+          .updateTable("fireflies_sync_state")
+          .set({ sync_frequency: frequency, updated_at: sql`now()` })
+          .where("id", "=", existing.id)
+          .execute();
+      } else {
+        await db
+          .insertInto("fireflies_sync_state")
+          .values({ sync_frequency: frequency } as never)
+          .execute();
+      }
+    },
+
     async incrementCounters(counts: {
       transcripts?: number;
       meetings?: number;

@@ -35,7 +35,7 @@ export interface CompaniesTable {
   description: string | null;
   tech_stack: string | null;
   funding_stage: string | null;
-  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors'
+  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors' | 'investors'
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -59,7 +59,7 @@ export interface ContactsTable {
   linkedin_url: string | null;
   company_id: string | null;
   source: string;
-  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors'
+  category: Generated<string>; // 'uncategorized' | 'sales' | 'client' | 'muted' | 'hiring' | 'contractors' | 'investors'
   is_canvas_user: Generated<boolean>;
   is_sketch_user: Generated<boolean>;
   uses_services: Generated<boolean>;
@@ -394,6 +394,7 @@ export interface FirefliesSyncStateTable {
   meetings_created: Generated<number>;
   contacts_matched: Generated<number>;
   sync_period: Generated<string>;
+  sync_frequency: Generated<string>;
   oldest_transcript_at: string | null;
   newest_transcript_at: string | null;
   created_at: Generated<string>;

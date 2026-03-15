@@ -18,6 +18,7 @@ const CATEGORY_OPTIONS: Array<{
   { value: "client", label: "Client", dot: "bg-green-500" },
   { value: "hiring", label: "Hiring", dot: "bg-purple-500" },
   { value: "contractors", label: "Contractors", dot: "bg-orange-500" },
+  { value: "investors", label: "Investors", dot: "bg-emerald-500" },
   { value: "muted", label: "Muted", dot: "bg-gray-400" },
   { value: "uncategorized", label: "Uncategorized", dot: "bg-gray-300" },
 ];

@@ -26,6 +26,7 @@ import {
   Crown,
   EnvelopeSimple,
   Eye,
+  Lightning,
   LinkedinLogo,
   ListChecks,
   MagnifyingGlass,
@@ -74,6 +75,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { useActionPending, useGenerateActions, useLatestActionRun, useCancelActionGeneration } from "@/hooks/use-actions";
 import { useCompanies, useCreateCompany, useUpdateCompany } from "@/hooks/use-companies";
 import {
   useBatchDeleteContacts,
@@ -136,6 +138,13 @@ function DirectoryPage() {
   const { data: reviewCount } = useNeedsReviewCount();
   const totalReviewCount = pendingDedups + (reviewCount ?? 0);
 
+  // Action generation
+  const { data: pendingActions } = useActionPending();
+  const { data: latestRun } = useLatestActionRun();
+  const generateActions = useGenerateActions();
+  const cancelActions = useCancelActionGeneration();
+  const isRunning = latestRun?.status === "running";
+
   function setTab(next: string) {
     navigate({
       search: (prev) => ({ ...prev, tab: next, page: 1 }),
@@ -161,6 +170,53 @@ function DirectoryPage() {
           <ClassificationPopover />
         </div>
       </div>
+
+      {/* ── Action Generation Banner ── */}
+      {(isRunning || (pendingActions?.count ?? 0) > 0) && (
+        <div className="mt-4 flex items-center justify-between rounded-lg border border-border bg-card p-3">
+          {isRunning && latestRun ? (
+            <>
+              <div className="flex items-center gap-2">
+                <SpinnerGap size={16} className="animate-spin text-primary" />
+                <span className="text-sm">
+                  Generating actions ({latestRun.processedContacts}/{latestRun.totalContacts} contacts
+                  {latestRun.tasksCreated > 0 && `, ${latestRun.tasksCreated} created`})
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => cancelActions.mutate()}
+                disabled={cancelActions.isPending}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <Lightning size={16} className="text-amber-500" weight="fill" />
+                <span className="text-sm">
+                  New activity for <span className="font-medium">{pendingActions?.count}</span> contact{pendingActions?.count === 1 ? "" : "s"} in sales pipeline
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => generateActions.mutate()}
+                disabled={generateActions.isPending}
+              >
+                {generateActions.isPending ? (
+                  <SpinnerGap size={14} className="animate-spin mr-1.5" />
+                ) : (
+                  <Lightning size={14} className="mr-1.5" />
+                )}
+                Generate Actions
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Tabs ── */}
       <Tabs value={tab} onValueChange={setTab} className="mt-5">

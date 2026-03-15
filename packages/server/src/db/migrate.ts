@@ -25,6 +25,7 @@ import * as m018 from "./migrations/018-rename-pipeline-to-category.js";
 import * as m019 from "./migrations/019-gmail-date-range.js";
 import * as m020 from "./migrations/020-fireflies-integration.js";
 import * as m021 from "./migrations/021-action-generator.js";
+import * as m022 from "./migrations/022-fireflies-sync-frequency.js";
 import type { DB } from "./schema.js";
 
 export async function runMigrations(db: Kysely<DB>): Promise<void> {
@@ -54,6 +55,7 @@ export async function runMigrations(db: Kysely<DB>): Promise<void> {
           "019-gmail-date-range": m019,
           "020-fireflies-integration": m020,
           "021-action-generator": m021,
+          "022-fireflies-sync-frequency": m022,
         };
       },
     },

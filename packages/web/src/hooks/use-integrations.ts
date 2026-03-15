@@ -155,6 +155,21 @@ export function useFirefliesSync() {
   });
 }
 
+export function useUpdateFirefliesSyncFrequency() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (frequency: string) =>
+      api.integrations.updateFirefliesSyncFrequency({ frequency }),
+    onSuccess: () => {
+      toast.success("Sync frequency updated");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
 export function useCancelFirefliesSync() {
   const queryClient = useQueryClient();
   return useMutation({

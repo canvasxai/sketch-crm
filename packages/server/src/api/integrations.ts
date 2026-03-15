@@ -122,6 +122,7 @@ export function integrationsRoutes(deps: IntegrationDeps) {
         transcriptsSynced: firefliesState?.transcripts_synced ?? 0,
         meetingsCreated: firefliesState?.meetings_created ?? 0,
         contactsMatched: firefliesState?.contacts_matched ?? 0,
+        syncFrequency: firefliesState?.sync_frequency ?? "manual",
         syncPeriod: firefliesState?.sync_period ?? "3months",
         oldestTranscriptAt: firefliesState?.oldest_transcript_at ?? null,
         newestTranscriptAt: firefliesState?.newest_transcript_at ?? null,
@@ -487,6 +488,7 @@ export function integrationsRoutes(deps: IntegrationDeps) {
       transcriptsSynced: syncState?.transcripts_synced ?? 0,
       meetingsCreated: syncState?.meetings_created ?? 0,
       contactsMatched: syncState?.contacts_matched ?? 0,
+      syncFrequency: syncState?.sync_frequency ?? "manual",
       syncPeriod: syncState?.sync_period ?? "3months",
       oldestTranscriptAt: syncState?.oldest_transcript_at ?? null,
       newestTranscriptAt: syncState?.newest_transcript_at ?? null,
@@ -555,6 +557,30 @@ export function integrationsRoutes(deps: IntegrationDeps) {
       }
     }
     return c.json({ success: true, wasRunning });
+  });
+
+  // PUT /fireflies/sync-frequency — update Fireflies sync frequency
+  routes.put("/fireflies/sync-frequency", async (c) => {
+    const userEmail = await getUserEmail(c, deps.config);
+    if (!userEmail) return c.json({ error: { code: "UNAUTHORIZED", message: "Not authenticated" } }, 401);
+
+    const body = await c.req.json<{ frequency?: string }>().catch(() => ({ frequency: undefined }));
+    const validFrequencies = ["15min", "hourly", "daily", "manual"] as const;
+    const frequency = body.frequency;
+    if (!frequency || !validFrequencies.includes(frequency as (typeof validFrequencies)[number])) {
+      return c.json(
+        {
+          error: {
+            code: "VALIDATION_ERROR",
+            message: `Invalid frequency. Must be one of: ${validFrequencies.join(", ")}`,
+          },
+        },
+        400,
+      );
+    }
+
+    await deps.firefliesSyncState.setSyncFrequency(frequency);
+    return c.json({ success: true });
   });
 
   // GET /aimfox/accounts — list LinkedIn accounts from AimFox

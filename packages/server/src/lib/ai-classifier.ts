@@ -15,6 +15,7 @@ const CLASSIFICATION_PROMPT = `You are a CRM assistant for a B2B services/SaaS c
 - "hiring" — Job candidate or hiring-related contact. Someone applying for a role, being recruited, or involved in hiring discussions.
 - "muted" — Irrelevant contact. Newsletters, automated emails, vendors trying to sell to US, spam, cold outreach from others, transactional notifications.
 - "contractors" — Vendor, service provider, or contractor providing services TO our company. Includes accountants, banks, lawyers, designers, freelancers, IT providers, consultants.
+- "investors" — Investor, VC, angel, or fundraising-related contact. Includes venture capitalists, angel investors, fund managers, and contacts involved in fundraising or investment discussions.
 - "uncategorized" — Not enough information to classify. Only use this if there is truly insufficient signal.
 
 Also determine if this person is a **decision maker** — the primary relationship driver at their company. Decision makers are the main business contacts driving deals or owning the client relationship (e.g., buyers, account owners, executives with purchasing authority). Non-decision-makers are developers, operations, finance, legal, IT, or other team members who are relevant but not the primary contact.
@@ -22,7 +23,7 @@ Also determine if this person is a **decision maker** — the primary relationsh
 Also generate a brief summary (1-2 sentences) describing the relationship context.
 
 Respond with ONLY a JSON object:
-{ "category": "sales"|"client"|"hiring"|"muted"|"contractors"|"uncategorized", "isDecisionMaker": true|false, "summary": "<1-2 sentence context>", "confidence": "high"|"medium"|"low" }`;
+{ "category": "sales"|"client"|"hiring"|"muted"|"contractors"|"investors"|"uncategorized", "isDecisionMaker": true|false, "summary": "<1-2 sentence context>", "confidence": "high"|"medium"|"low" }`;
 
 interface EmailContext {
   subject: string;
@@ -131,6 +132,7 @@ export async function classifyContact(
       "hiring",
       "muted",
       "contractors",
+      "investors",
       "uncategorized",
     ];
     if (!validCategories.includes(parsed.category)) {

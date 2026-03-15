@@ -197,7 +197,7 @@ interface SingleEnrichDeps extends BaseDeps {
 }
 
 // Categories that warrant the cost of web search + Haiku
-const ENRICHMENT_CATEGORIES = new Set(["sales", "client", "hiring", "contractors"]);
+const ENRICHMENT_CATEGORIES = new Set(["sales", "client", "hiring", "contractors", "investors"]);
 
 /**
  * Check if a category value should trigger LinkedIn enrichment.

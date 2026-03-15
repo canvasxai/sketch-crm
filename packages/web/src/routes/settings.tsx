@@ -2,6 +2,7 @@ import {
   Calendar,
   EnvelopeSimple,
   GearSix,
+  Headset,
   LinkedinLogo,
   Plus,
   X,
@@ -19,6 +20,7 @@ import {
   useAimfoxAccounts,
   useSourceStatus,
   useUpdateCalendarSyncFrequency,
+  useUpdateFirefliesSyncFrequency,
   useUpdateGmailSyncFrequency,
 } from "@/hooks/use-integrations";
 import {
@@ -50,6 +52,7 @@ function SettingsPage() {
   const { data: sourceStatus, isLoading: statusLoading } = useSourceStatus();
   const updateGmailFrequency = useUpdateGmailSyncFrequency();
   const updateCalendarFrequency = useUpdateCalendarSyncFrequency();
+  const updateFirefliesFrequency = useUpdateFirefliesSyncFrequency();
 
   const { data: aimfoxAccountsData, isLoading: accountsLoading } = useAimfoxAccounts();
 
@@ -148,6 +151,43 @@ function SettingsPage() {
                 <Select
                   value={sourceStatus?.google_calendar.syncFrequency ?? "manual"}
                   onValueChange={(value) => updateCalendarFrequency.mutate(value)}
+                >
+                  <SelectTrigger size="sm" className="h-8 w-[140px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(FREQUENCY_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value} className="text-xs">
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            {/* Fireflies frequency */}
+            <div className="flex items-center justify-between p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-8 items-center justify-center rounded-md bg-purple-500/10">
+                  <Headset size={16} className="text-purple-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Fireflies</p>
+                  {statusLoading ? (
+                    <Skeleton className="mt-0.5 h-3 w-24" />
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      {sourceStatus?.fireflies?.connected ? "Connected" : "Not connected"}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {statusLoading ? (
+                <Skeleton className="h-8 w-[140px]" />
+              ) : (
+                <Select
+                  value={sourceStatus?.fireflies?.syncFrequency ?? "manual"}
+                  onValueChange={(value) => updateFirefliesFrequency.mutate(value)}
                 >
                   <SelectTrigger size="sm" className="h-8 w-[140px] text-xs">
                     <SelectValue />

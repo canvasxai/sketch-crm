@@ -27,6 +27,25 @@ interface ActionDeps {
 export function actionsRoutes(deps: ActionDeps) {
   const routes = new Hono();
 
+  // GET /pending — count contacts in sales pipeline with unprocessed activities
+  routes.get("/pending", async (c) => {
+    const candidates = await deps.contacts.findActionCandidates();
+    let contactsWithActivity = 0;
+
+    for (const contact of candidates) {
+      const [emails, messages, meetings] = await Promise.all([
+        deps.emails.findUnprocessedActivities(contact.id),
+        deps.linkedinMessages.findUnprocessedActivities(contact.id),
+        deps.meetings.findUnprocessedActivities(contact.id),
+      ]);
+      if (emails.length > 0 || messages.length > 0 || meetings.length > 0) {
+        contactsWithActivity++;
+      }
+    }
+
+    return c.json({ count: contactsWithActivity, totalCandidates: candidates.length });
+  });
+
   // POST /generate — bulk action generation (fire-and-forget)
   routes.post("/generate", async (c) => {
     try {

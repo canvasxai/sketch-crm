@@ -18,6 +18,7 @@ import {
 import { useTheme } from "@/hooks/use-theme";
 import {
   AddressBookIcon,
+  CheckSquareIcon,
   ClockIcon,
   GearSixIcon,
   KanbanIcon,
@@ -39,6 +40,7 @@ const primaryNav: NavItem[] = [
   { label: "Categories", icon: <KanbanIcon size={18} />, href: "/" },
   { label: "Directory", icon: <AddressBookIcon size={18} />, href: "/directory" },
   { label: "Activities", icon: <ClockIcon size={18} />, href: "/activities" },
+  { label: "My Todos", icon: <CheckSquareIcon size={18} />, href: "/todos" },
   { label: "Team", icon: <UsersThreeIcon size={18} />, href: "/team" },
   { label: "Settings", icon: <GearSixIcon size={18} />, href: "/settings" },
 ];

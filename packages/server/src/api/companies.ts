@@ -7,7 +7,7 @@ import { mapRow, mapRows } from "../lib/map-row.js";
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 
-const categoryEnum = z.enum(["uncategorized", "sales", "client", "muted", "hiring", "contractors"]);
+const categoryEnum = z.enum(["uncategorized", "sales", "client", "muted", "hiring", "contractors", "investors"]);
 
 const createSchema = z.object({
   name: z.string().min(1, "Name is required"),

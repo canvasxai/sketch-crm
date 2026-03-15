@@ -67,7 +67,7 @@ export const pipelineRoute = createRoute({
 // ── Pipeline config ──
 
 /** Default visible categories — muted is hidden unless toggled on */
-const DEFAULT_CATEGORIES: CompanyCategory[] = ["uncategorized", "sales", "client", "hiring", "contractors"];
+const DEFAULT_CATEGORIES: CompanyCategory[] = ["uncategorized", "sales", "client", "hiring", "contractors", "investors"];
 const ALL_CATEGORIES: readonly CompanyCategory[] = COMPANY_CATEGORIES;
 
 const categoryColors: Record<CompanyCategory, string> = {
@@ -77,6 +77,7 @@ const categoryColors: Record<CompanyCategory, string> = {
   muted: "bg-gray-300",
   hiring: "bg-purple-500",
   contractors: "bg-orange-500",
+  investors: "bg-emerald-500",
 };
 
 const categoryLabels: Record<CompanyCategory, string> = {
@@ -86,6 +87,7 @@ const categoryLabels: Record<CompanyCategory, string> = {
   muted: "Muted",
   hiring: "Hiring",
   contractors: "Contractors",
+  investors: "Investors",
 };
 
 // ── Company card model ──

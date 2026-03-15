@@ -1,5 +1,5 @@
 // ── Company category classifications ──
-export const COMPANY_CATEGORIES = ["uncategorized", "sales", "client", "muted", "hiring", "contractors"] as const;
+export const COMPANY_CATEGORIES = ["uncategorized", "sales", "client", "muted", "hiring", "contractors", "investors"] as const;
 export type CompanyCategory = (typeof COMPANY_CATEGORIES)[number];
 
 // Legacy aliases (Sense A rename: pipeline → category)
@@ -7,7 +7,7 @@ export const COMPANY_PIPELINES = COMPANY_CATEGORIES;
 export type CompanyPipeline = CompanyCategory;
 
 // ── Contact category (AI-assigned classification) ──
-export const CONTACT_CATEGORIES = ["sales", "client", "muted", "hiring", "contractors"] as const;
+export const CONTACT_CATEGORIES = ["sales", "client", "muted", "hiring", "contractors", "investors"] as const;
 export type ContactCategory = (typeof CONTACT_CATEGORIES)[number];
 
 // Legacy aliases
@@ -278,6 +278,9 @@ export interface Task {
   completed: boolean;
   completedAt: string | null;
   createdBy: string | null;
+  origin: string;
+  sourceType: string | null;
+  sourceId: string | null;
   createdAt: string;
   updatedAt: string;
 }

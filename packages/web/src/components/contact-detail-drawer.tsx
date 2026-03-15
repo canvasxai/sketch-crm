@@ -103,7 +103,7 @@ function normalizeBody(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function FindLinkedinButton({ contactId }: { contactId: string }) {
+function FindLinkedinButton({ contactId, onFound }: { contactId: string; onFound?: (url: string) => void }) {
   const [state, setState] = useState<"idle" | "loading" | "not-found">("idle");
   const queryClient = useQueryClient();
 
@@ -113,6 +113,7 @@ function FindLinkedinButton({ contactId }: { contactId: string }) {
       const res = await api.contacts.enrichLinkedin(contactId);
       if (res.linkedinUrl) {
         queryClient.invalidateQueries({ queryKey: ["contacts"] });
+        onFound?.(res.linkedinUrl);
       } else {
         setState("not-found");
       }
@@ -167,6 +168,7 @@ export function ContactDetailDrawer({
   const [editEmails, setEditEmails] = useState(contact.email ?? "");
   const [editPhones, setEditPhones] = useState(contact.phone ?? "");
   const [editLinkedin, setEditLinkedin] = useState(contact.linkedinUrl ?? "");
+  const [liveLinkedinUrl, setLiveLinkedinUrl] = useState(contact.linkedinUrl ?? null);
 
   // Stage & channel
   const [currentStage, setCurrentStage] = useState<string>(contact.category ?? "uncategorized");
@@ -489,13 +491,13 @@ export function ContactDetailDrawer({
                     />
                   </div>
                 ) : (
-                  contact.linkedinUrl ? (
-                    <a href={contact.linkedinUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors max-w-full">
+                  liveLinkedinUrl ? (
+                    <a href={liveLinkedinUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors max-w-full">
                       <LinkedinLogo size={13} className="shrink-0" />
-                      <span className="truncate">{contact.linkedinUrl.replace(/\/+$/, "").split("/").pop() || "LinkedIn"}</span>
+                      <span className="truncate">{liveLinkedinUrl.replace(/\/+$/, "").split("/").pop() || "LinkedIn"}</span>
                     </a>
                   ) : (
-                    <FindLinkedinButton contactId={contact.id} />
+                    <FindLinkedinButton contactId={contact.id} onFound={(url) => { setLiveLinkedinUrl(url); setEditLinkedin(url); }} />
                   )
                 )}
               </div>
