@@ -1,6 +1,6 @@
-import type { CompanyPipeline } from "@crm/shared";
+import type { CompanyCategory } from "@crm/shared";
 import type { DrawerTimelineEvent, LeadChannel } from "./drawer-types";
-import { PIPELINE_STYLES, PIPELINE_LABELS, leadChannelLabels, sourceLabels } from "./drawer-types";
+import { CATEGORY_STYLES, CATEGORY_LABELS, leadChannelLabels, sourceLabels } from "./drawer-types";
 
 // ── Time formatting ──
 
@@ -67,12 +67,12 @@ export function groupByDate(
 
 // ── Label helpers ──
 
-export function drawerPipelineStyle(pipeline: CompanyPipeline): string {
-  return PIPELINE_STYLES[pipeline] ?? "bg-secondary text-secondary-foreground";
+export function drawerCategoryStyle(category: CompanyCategory): string {
+  return CATEGORY_STYLES[category] ?? "bg-secondary text-secondary-foreground";
 }
 
-export function drawerPipelineLabel(pipeline: CompanyPipeline): string {
-  return PIPELINE_LABELS[pipeline] ?? pipeline;
+export function drawerCategoryLabel(category: CompanyCategory): string {
+  return CATEGORY_LABELS[category] ?? category;
 }
 
 export function drawerSourceLabel(source: string): string {

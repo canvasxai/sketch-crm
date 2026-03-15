@@ -3,14 +3,14 @@ import type { DB } from "../schema.js";
 
 export function createCompaniesRepository(db: Kysely<DB>) {
   return {
-    async list(opts?: { limit?: number; offset?: number; search?: string; pipeline?: string }) {
+    async list(opts?: { limit?: number; offset?: number; search?: string; category?: string }) {
       let query = db.selectFrom("companies").selectAll().orderBy("created_at", "desc");
 
       if (opts?.search) {
         query = query.where("name", "ilike", `%${opts.search}%`);
       }
-      if (opts?.pipeline !== undefined) {
-        query = query.where("pipeline", "=", opts.pipeline);
+      if (opts?.category !== undefined) {
+        query = query.where("category", "=", opts.category);
       }
 
       if (opts?.limit !== undefined) {
@@ -80,7 +80,7 @@ export function createCompaniesRepository(db: Kysely<DB>) {
       description?: string;
       techStack?: string;
       fundingStage?: string;
-      pipeline?: string;
+      category?: string;
     }) {
       return db
         .insertInto("companies")
@@ -96,7 +96,7 @@ export function createCompaniesRepository(db: Kysely<DB>) {
           description: data.description ?? null,
           tech_stack: data.techStack ?? null,
           funding_stage: data.fundingStage ?? null,
-          ...(data.pipeline !== undefined ? { pipeline: data.pipeline } : {}),
+          ...(data.category !== undefined ? { category: data.category } : {}),
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -116,7 +116,7 @@ export function createCompaniesRepository(db: Kysely<DB>) {
         description: string | null;
         techStack: string | null;
         fundingStage: string | null;
-        pipeline: string;
+        category: string;
       }>,
     ) {
       const values: Record<string, unknown> = {};
@@ -131,7 +131,7 @@ export function createCompaniesRepository(db: Kysely<DB>) {
       if (data.description !== undefined) values.description = data.description;
       if (data.techStack !== undefined) values.tech_stack = data.techStack;
       if (data.fundingStage !== undefined) values.funding_stage = data.fundingStage;
-      if (data.pipeline !== undefined) values.pipeline = data.pipeline;
+      if (data.category !== undefined) values.category = data.category;
 
       if (Object.keys(values).length === 0) {
         return db

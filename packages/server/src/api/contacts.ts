@@ -18,6 +18,9 @@ import {
 } from "../lib/domains.js";
 import { computeMergeUpdate } from "../lib/dedup.js";
 import { mapRow, mapRows } from "../lib/map-row.js";
+import { createBedrockClient } from "../lib/bedrock.js";
+import { createCanvasClient } from "../lib/canvas-client.js";
+import { enrichContactLinkedin, shouldEnrichForCategory } from "../lib/cross-source-dedup.js";
 
 type ContactsRepo = ReturnType<typeof createContactsRepository>;
 type CompaniesRepo = ReturnType<typeof createCompaniesRepository>;
@@ -64,10 +67,11 @@ const createSchema = z.object({
   linkedinUrl: z.string().url().optional(),
   companyId: z.string().optional(),
   source: sourceEnum,
-  pipeline: z.string().nullable().optional(),
+  category: z.string().optional(),
   isCanvasUser: z.boolean().optional(),
   isSketchUser: z.boolean().optional(),
   usesServices: z.boolean().optional(),
+  isDecisionMaker: z.boolean().optional(),
   canvasSignupDate: z.string().optional(),
   autoCreateCompany: z.boolean().optional(),
   visibility: visibilityEnum.optional(),
@@ -84,10 +88,11 @@ const updateSchema = z.object({
   linkedinUrl: z.string().url().nullable().optional(),
   companyId: z.string().nullable().optional(),
   source: sourceEnum.optional(),
-  pipeline: z.string().nullable().optional(),
+  category: z.string().optional(),
   isCanvasUser: z.boolean().optional(),
   isSketchUser: z.boolean().optional(),
   usesServices: z.boolean().optional(),
+  isDecisionMaker: z.boolean().optional(),
   canvasSignupDate: z.string().nullable().optional(),
   visibility: visibilityEnum.optional(),
   leadChannel: leadChannelEnum.nullable().optional(),
@@ -109,10 +114,11 @@ const bulkCreateSchema = z.object({
       title: z.string().optional(),
       linkedinUrl: z.string().optional(),
       companyId: z.string().optional(),
-      pipeline: z.string().nullable().optional(),
+      category: z.string().optional(),
       isCanvasUser: z.boolean().optional(),
       isSketchUser: z.boolean().optional(),
       usesServices: z.boolean().optional(),
+      isDecisionMaker: z.boolean().optional(),
       canvasSignupDate: z.string().optional(),
     }),
   ),
@@ -139,6 +145,102 @@ async function getCurrentUserId(
   if (!payload?.email) return null;
   const user = await users.findByEmail(payload.email);
   return user?.id ?? null;
+}
+
+/**
+ * Merge two contacts: transfers emails, linkedin messages, owners, and fields
+ * from mergeContact into keepContact, then deletes mergeContact.
+ */
+export async function mergeContacts(
+  keepContactId: string,
+  mergeContactId: string,
+  deps: {
+    contacts: ContactsRepo;
+    emails?: EmailsRepo;
+    linkedinMessages?: LinkedinMessagesRepo;
+    dedupCandidates?: DedupCandidatesRepo;
+  },
+): Promise<void> {
+  const keepContact = await deps.contacts.findById(keepContactId);
+  const mergeContact = await deps.contacts.findById(mergeContactId);
+  if (!keepContact || !mergeContact) throw new Error("One or both contacts not found");
+
+  // 1. Transfer related records
+  if (deps.emails) {
+    const mergeEmails = await deps.emails.list({ contactId: mergeContactId });
+    for (const email of mergeEmails) {
+      await deps.emails.update(email.id, { contactId: keepContactId });
+    }
+  }
+  if (deps.linkedinMessages) {
+    const mergeMessages = await deps.linkedinMessages.list({ contactId: mergeContactId });
+    for (const msg of mergeMessages) {
+      await deps.linkedinMessages.update(msg.id, { contactId: keepContactId });
+    }
+  }
+  // Transfer meetings, tasks, notes, opportunities
+  await deps.contacts.transferRelatedRecords(mergeContactId, keepContactId);
+
+  // 2. Merge fields (fill gaps only)
+  const mergeFields = computeMergeUpdate(
+    {
+      email: keepContact.email,
+      phone: keepContact.phone,
+      title: keepContact.title,
+      linkedin_url: keepContact.linkedin_url,
+      company_id: keepContact.company_id,
+      aimfox_lead_id: keepContact.aimfox_lead_id,
+      aimfox_profile_data: keepContact.aimfox_profile_data,
+      ai_summary: keepContact.ai_summary,
+    },
+    {
+      email: mergeContact.email,
+      phone: mergeContact.phone,
+      title: mergeContact.title,
+      linkedin_url: mergeContact.linkedin_url,
+      company_id: mergeContact.company_id,
+      aimfox_lead_id: mergeContact.aimfox_lead_id,
+      aimfox_profile_data: mergeContact.aimfox_profile_data,
+      ai_summary: mergeContact.ai_summary,
+    },
+  );
+
+  const updateData: Record<string, unknown> = {};
+  if (mergeFields.email !== undefined) updateData.email = mergeFields.email;
+  if (mergeFields.phone !== undefined) updateData.phone = mergeFields.phone;
+  if (mergeFields.title !== undefined) updateData.title = mergeFields.title;
+  if (mergeFields.linkedin_url !== undefined) updateData.linkedinUrl = mergeFields.linkedin_url;
+  if (mergeFields.company_id !== undefined) updateData.companyId = mergeFields.company_id;
+  if (mergeFields.aimfox_lead_id !== undefined) updateData.aimfoxLeadId = mergeFields.aimfox_lead_id;
+  if (mergeFields.aimfox_profile_data !== undefined) updateData.aimfoxProfileData = mergeFields.aimfox_profile_data;
+
+  // 3. Append mergeContact's email
+  if (mergeContact.email) {
+    await deps.contacts.appendEmail(keepContactId, {
+      email: mergeContact.email,
+      type: "work",
+      isPrimary: false,
+    });
+  }
+
+  // 4. Apply merged field updates
+  if (Object.keys(updateData).length > 0) {
+    await deps.contacts.update(keepContactId, updateData);
+  }
+
+  // 5. Transfer owners
+  const mergeOwners = await deps.contacts.getOwners(mergeContactId);
+  for (const owner of mergeOwners) {
+    await deps.contacts.addOwner(keepContactId, owner.id);
+  }
+
+  // 6. Resolve dedup candidates
+  if (deps.dedupCandidates) {
+    await deps.dedupCandidates.resolveByContactId(mergeContactId, "merged");
+  }
+
+  // 7. Delete merged contact
+  await deps.contacts.remove(mergeContactId);
 }
 
 export function contactsRoutes(
@@ -175,7 +277,7 @@ export function contactsRoutes(
     const currentUserId = await getCurrentUserId(c, config, users);
 
     const filters = {
-      pipeline: c.req.query("pipeline"),
+      category: c.req.query("category"),
       source: c.req.query("source"),
       companyId: c.req.query("companyId"),
       ownerId: c.req.query("ownerId"),
@@ -188,6 +290,9 @@ export function contactsRoutes(
         : undefined,
       usesServices: c.req.query("usesServices")
         ? c.req.query("usesServices") === "true"
+        : undefined,
+      isDecisionMaker: c.req.query("isDecisionMaker")
+        ? c.req.query("isDecisionMaker") === "true"
         : undefined,
       search: c.req.query("search"),
       limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,
@@ -454,6 +559,41 @@ export function contactsRoutes(
     }
 
     const contact = await repo.update(id, parsed.data);
+
+    // Auto-sync: when category changes, propagate to company + all sibling contacts
+    if (parsed.data.category && contact.company_id) {
+      await companiesRepo.update(contact.company_id, { category: parsed.data.category });
+      await repo.updateCategoryByCompanyId(contact.company_id, parsed.data.category);
+      console.log(`[contacts] Synced category "${parsed.data.category}" to company ${contact.company_id} + siblings`);
+    }
+
+    // Trigger Pass 2 LinkedIn enrichment when category changes to high-value
+    if (
+      parsed.data.category &&
+      shouldEnrichForCategory(parsed.data.category) &&
+      !contact.linkedin_url
+    ) {
+      const canvasClient = createCanvasClient(config);
+      const anthropic = createBedrockClient(config);
+      if (canvasClient && anthropic) {
+        enrichContactLinkedin(contact.id, {
+          contacts: repo,
+          companies: companiesRepo,
+          dedupCandidates: dedupCandidates!,
+          canvas: canvasClient,
+          anthropic,
+          autoMerge: (keepId, mergeId) => mergeContacts(keepId, mergeId, {
+            contacts: repo,
+            emails,
+            linkedinMessages,
+            dedupCandidates,
+          }),
+        }).catch((err) => {
+          console.error(`[contacts] LinkedIn enrichment failed for ${contact.name}:`, err);
+        });
+      }
+    }
+
     return c.json({ contact: mapRow(contact) });
   });
 
@@ -471,6 +611,42 @@ export function contactsRoutes(
 
     await repo.remove(id);
     return c.json({ success: true });
+  });
+
+  // POST /:id/enrich-linkedin — trigger LinkedIn enrichment for a single contact
+  routes.post("/:id/enrich-linkedin", async (c) => {
+    const id = c.req.param("id");
+    const contact = await repo.findById(id);
+    if (!contact) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Contact not found" } }, 404);
+    }
+    if (contact.linkedin_url) {
+      return c.json({ contact: mapRow(contact), alreadyHasLinkedin: true });
+    }
+
+    const canvasClient = createCanvasClient(config);
+    const anthropic = createBedrockClient(config);
+    console.log(`[enrich-linkedin] canvasClient=${!!canvasClient}, anthropic=${!!anthropic}, CANVAS_API_URL=${config.CANVAS_API_URL ?? "not set"}`);
+    if (!canvasClient || !anthropic) {
+      return c.json({ error: { code: "CONFIG_ERROR", message: "Search/AI not configured" } }, 400);
+    }
+
+    await enrichContactLinkedin(contact.id, {
+      contacts: repo,
+      companies: companiesRepo,
+      dedupCandidates: dedupCandidates!,
+      canvas: canvasClient,
+      anthropic,
+      autoMerge: (keepId, mergeId) => mergeContacts(keepId, mergeId, {
+        contacts: repo,
+        emails,
+        linkedinMessages,
+        dedupCandidates,
+      }),
+    });
+
+    const updated = await repo.findById(id);
+    return c.json({ contact: mapRow(updated!), linkedinUrl: updated?.linkedin_url ?? null });
   });
 
   // Add owner to contact
@@ -673,82 +849,12 @@ export function contactsRoutes(
       );
     }
 
-    // 1. Transfer related records to the kept contact
-    if (emails) {
-      const mergeEmails = await emails.list({ contactId: mergeContactId });
-      for (const email of mergeEmails) {
-        await emails.update(email.id, { contactId: keepContactId });
-      }
-    }
-
-    if (linkedinMessages) {
-      const mergeMessages = await linkedinMessages.list({ contactId: mergeContactId });
-      for (const msg of mergeMessages) {
-        await linkedinMessages.update(msg.id, { contactId: keepContactId });
-      }
-    }
-
-    // 2. Merge fields from mergeContact into keepContact (fill gaps only)
-    const mergeFields = computeMergeUpdate(
-      {
-        email: keepContact.email,
-        phone: keepContact.phone,
-        title: keepContact.title,
-        linkedin_url: keepContact.linkedin_url,
-        company_id: keepContact.company_id,
-        aimfox_lead_id: keepContact.aimfox_lead_id,
-        aimfox_profile_data: keepContact.aimfox_profile_data,
-        ai_summary: keepContact.ai_summary,
-      },
-      {
-        email: mergeContact.email,
-        phone: mergeContact.phone,
-        title: mergeContact.title,
-        linkedin_url: mergeContact.linkedin_url,
-        company_id: mergeContact.company_id,
-        aimfox_lead_id: mergeContact.aimfox_lead_id,
-        aimfox_profile_data: mergeContact.aimfox_profile_data,
-        ai_summary: mergeContact.ai_summary,
-      },
-    );
-
-    // Map snake_case DB fields to camelCase for the update method
-    const updateData: Record<string, unknown> = {};
-    if (mergeFields.email !== undefined) updateData.email = mergeFields.email;
-    if (mergeFields.phone !== undefined) updateData.phone = mergeFields.phone;
-    if (mergeFields.title !== undefined) updateData.title = mergeFields.title;
-    if (mergeFields.linkedin_url !== undefined) updateData.linkedinUrl = mergeFields.linkedin_url;
-    if (mergeFields.company_id !== undefined) updateData.companyId = mergeFields.company_id;
-    if (mergeFields.aimfox_lead_id !== undefined) updateData.aimfoxLeadId = mergeFields.aimfox_lead_id;
-    if (mergeFields.aimfox_profile_data !== undefined) updateData.aimfoxProfileData = mergeFields.aimfox_profile_data;
-
-    // 3. Append mergeContact's email to keepContact's emails array
-    if (mergeContact.email) {
-      await repo.appendEmail(keepContactId, {
-        email: mergeContact.email,
-        type: "work",
-        isPrimary: false,
-      });
-    }
-
-    // 4. Apply merged field updates
-    if (Object.keys(updateData).length > 0) {
-      await repo.update(keepContactId, updateData);
-    }
-
-    // 5. Transfer owners from merged contact to kept contact
-    const mergeOwners = await repo.getOwners(mergeContactId);
-    for (const owner of mergeOwners) {
-      await repo.addOwner(keepContactId, owner.id);
-    }
-
-    // 6. Resolve any dedup candidates involving the merged contact
-    if (dedupCandidates) {
-      await dedupCandidates.resolveByContactId(mergeContactId, "merged");
-    }
-
-    // 7. Delete the merged contact
-    await repo.remove(mergeContactId);
+    await mergeContacts(keepContactId, mergeContactId, {
+      contacts: repo,
+      emails,
+      linkedinMessages,
+      dedupCandidates,
+    });
 
     const updatedContact = await repo.findById(keepContactId);
     return c.json({ contact: updatedContact ? mapRow(updatedContact) : null });

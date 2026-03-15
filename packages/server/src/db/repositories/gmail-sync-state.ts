@@ -21,6 +21,8 @@ export function createGmailSyncStateRepository(db: Kysely<DB>) {
         emailsSynced: number;
         contactsCreated: number;
         companiesCreated: number;
+        oldestEmailAt: string | null;
+        newestEmailAt: string | null;
       }>,
     ) {
       const values: Record<string, unknown> = { user_id: userId };
@@ -36,6 +38,10 @@ export function createGmailSyncStateRepository(db: Kysely<DB>) {
         values.contacts_created = data.contactsCreated;
       if (data.companiesCreated !== undefined)
         values.companies_created = data.companiesCreated;
+      if (data.oldestEmailAt !== undefined)
+        values.oldest_email_at = data.oldestEmailAt;
+      if (data.newestEmailAt !== undefined)
+        values.newest_email_at = data.newestEmailAt;
 
       const existing = await this.findByUser(userId);
 

@@ -6,8 +6,8 @@ export function createClassificationLogsRepository(db: Kysely<DB>) {
     async create(data: {
       contactId: string;
       runId: string;
-      pipelineAssigned: string | null;
-      previousPipeline: string | null;
+      categoryAssigned: string | null;
+      previousCategory: string | null;
       aiSummary: string | null;
       confidence: string | null;
     }) {
@@ -16,8 +16,8 @@ export function createClassificationLogsRepository(db: Kysely<DB>) {
         .values({
           contact_id: data.contactId,
           run_id: data.runId,
-          pipeline_assigned: data.pipelineAssigned,
-          previous_pipeline: data.previousPipeline,
+          category_assigned: data.categoryAssigned,
+          previous_category: data.previousCategory,
           ai_summary: data.aiSummary,
           confidence: data.confidence,
         })
@@ -35,8 +35,8 @@ export function createClassificationLogsRepository(db: Kysely<DB>) {
           "classification_logs.id",
           "classification_logs.contact_id",
           "classification_logs.run_id",
-          "classification_logs.pipeline_assigned",
-          "classification_logs.previous_pipeline",
+          "classification_logs.category_assigned",
+          "classification_logs.previous_category",
           "classification_logs.ai_summary",
           "classification_logs.confidence",
           "classification_logs.created_at",

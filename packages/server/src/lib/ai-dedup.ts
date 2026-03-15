@@ -7,7 +7,7 @@ import type AnthropicBedrock from "@anthropic-ai/bedrock-sdk";
 import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 import type { createDedupCandidatesRepository } from "../db/repositories/dedup-candidates.js";
-import { areNamesCompatible } from "./dedup.js";
+import { areNamesCompatible, normalizeConfidence, stripMarkdownFences } from "./dedup.js";
 
 const MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
@@ -64,65 +64,18 @@ export async function checkNameDedup(
     system: DEDUP_PROMPT,
   });
 
-  const text =
+  let text =
     response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
 
+  // Strip markdown code fences if the model wraps its response
+  text = stripMarkdownFences(text);
+
   try {
-    return JSON.parse(text) as DedupResult;
+    const parsed = JSON.parse(text) as DedupResult;
+    parsed.confidence = normalizeConfidence(parsed.confidence);
+    return parsed;
   } catch {
     return { match: false, matchedIndex: null, confidence: "low", reason: "parse error" };
-  }
-}
-
-// ── Personal email classification ──
-
-const PERSONAL_EMAIL_CLASSIFICATION_PROMPT = `You are a CRM assistant. Given an email from a personal email domain (gmail, yahoo, hotmail, etc.), analyze the email content and determine:
-1. Is this person likely a business prospect (vs personal/spam)?
-2. Can you identify what company they work for from the email content?
-
-Respond with ONLY a JSON object:
-{ "isProspect": true/false, "companyName": "<company name or null>", "companyDomain": "<domain or null>", "confidence": "high"/"medium"/"low", "reason": "<brief explanation>" }`;
-
-export interface PersonalEmailClassification {
-  isProspect: boolean;
-  companyName: string | null;
-  companyDomain: string | null;
-  confidence: string;
-  reason: string;
-}
-
-export async function classifyPersonalEmail(
-  anthropic: AnthropicBedrock,
-  contactName: string,
-  contactEmail: string,
-  emailSubject: string,
-  emailBodySnippet: string,
-): Promise<PersonalEmailClassification> {
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 200,
-    messages: [
-      {
-        role: "user",
-        content: `Contact: ${contactName} (${contactEmail})\nSubject: ${emailSubject}\nBody preview:\n${emailBodySnippet.slice(0, 500)}`,
-      },
-    ],
-    system: PERSONAL_EMAIL_CLASSIFICATION_PROMPT,
-  });
-
-  const text =
-    response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
-
-  try {
-    return JSON.parse(text) as PersonalEmailClassification;
-  } catch {
-    return {
-      isProspect: true,
-      companyName: null,
-      companyDomain: null,
-      confidence: "low",
-      reason: "parse error",
-    };
   }
 }
 
@@ -138,20 +91,28 @@ interface Tier3Deps {
 /**
  * Run Tier 3 dedup on recently classified contacts.
  * Uses trigram similarity to find candidates, then AI to confirm ambiguous matches.
+ * Only processes contacts that haven't been dedup-checked yet.
  * Returns the number of dedup candidates created.
  */
 export async function runTier3Dedup(deps: Tier3Deps): Promise<number> {
-  // Get all contacts to check — in practice we'd want a "last_dedup_checked_at" field
-  // For now, check all contacts that have never been part of a dedup candidate
+  const uncheckedContacts = await deps.contacts.findNeedsDedupCheck(200);
 
-  // Get all contacts to check — in practice we'd want a "last_dedup_checked_at" field
-  // For now, check all contacts that have never been part of a dedup candidate
-  const allContacts = await deps.contacts.list({ limit: 500 });
+  if (uncheckedContacts.length === 0) {
+    console.log("[ai-dedup] No contacts need dedup checking");
+    return 0;
+  }
+
+  console.log(`[ai-dedup] Tier 3: checking ${uncheckedContacts.length} contacts`);
 
   let candidatesCreated = 0;
+  // Track pairs we've already checked in this run to avoid A↔B then B↔A
+  const checkedPairs = new Set<string>();
 
-  for (const contact of allContacts) {
-    if (!contact.email && !contact.name) continue;
+  for (const contact of uncheckedContacts) {
+    if (!contact.email && !contact.name) {
+      await deps.contacts.markDedupChecked(contact.id);
+      continue;
+    }
 
     // Find similar names via trigram
     const similar = await deps.contacts.findByNameSimilarity(
@@ -163,7 +124,12 @@ export async function runTier3Dedup(deps: Tier3Deps): Promise<number> {
     for (const candidate of similar) {
       if (candidate.id === contact.id) continue;
 
-      // Skip if pair already exists
+      // Build a canonical pair key to skip reverse direction
+      const pairKey = [contact.id, candidate.id].sort().join(":");
+      if (checkedPairs.has(pairKey)) continue;
+      checkedPairs.add(pairKey);
+
+      // Skip if pair already exists in DB
       const exists = await deps.dedupCandidates.existsPair(contact.id, candidate.id);
       if (exists) continue;
 
@@ -207,7 +173,11 @@ export async function runTier3Dedup(deps: Tier3Deps): Promise<number> {
         console.warn(`[ai-dedup] Failed to check pair ${contact.id}/${candidate.id}:`, err);
       }
     }
+
+    // Mark this contact as dedup-checked so we don't reprocess it
+    await deps.contacts.markDedupChecked(contact.id);
   }
 
+  console.log(`[ai-dedup] Tier 3 done: ${uncheckedContacts.length} checked, ${candidatesCreated} candidates created`);
   return candidatesCreated;
 }

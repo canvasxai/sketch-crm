@@ -74,6 +74,7 @@ export interface AimfoxLead {
     birthday?: { month: number; day: number };
   };
   phones: Array<{ number: string; type: string }>;
+  email?: string;
   emails?: Array<{ address: string; type?: string }>;
   labels: unknown[];
   notes: unknown[];

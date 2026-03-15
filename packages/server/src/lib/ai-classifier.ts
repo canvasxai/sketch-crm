@@ -37,6 +37,12 @@ interface MessageContext {
   date: string;
 }
 
+interface MeetingSummaryContext {
+  title: string;
+  summary: string;
+  date: string;
+}
+
 export interface ClassificationResult {
   category: string;
   isDecisionMaker: boolean;
@@ -55,7 +61,7 @@ export async function classifyContact(
   },
   emails: EmailContext[],
   messages: MessageContext[],
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; meetingSummaries?: MeetingSummaryContext[] },
 ): Promise<ClassificationResult> {
   const contactInfo = [
     `Name: ${contact.name}`,
@@ -84,7 +90,15 @@ export async function classifyContact(
           .join("\n\n")
       : "No LinkedIn message history.";
 
-  const userContent = `CONTACT:\n${contactInfo}\n\nRECENT EMAILS (last ${emails.length}):\n${emailHistory}\n\nRECENT LINKEDIN MESSAGES (last ${messages.length}):\n${messageHistory}`;
+  const meetingSummaries = options?.meetingSummaries ?? [];
+  const meetingHistory =
+    meetingSummaries.length > 0
+      ? meetingSummaries
+          .map((m) => `${m.date} — ${m.title}\n${m.summary}`)
+          .join("\n\n")
+      : "No meeting transcripts.";
+
+  const userContent = `CONTACT:\n${contactInfo}\n\nRECENT EMAILS (last ${emails.length}):\n${emailHistory}\n\nRECENT LINKEDIN MESSAGES (last ${messages.length}):\n${messageHistory}\n\nRECENT MEETING SUMMARIES (last ${meetingSummaries.length}):\n${meetingHistory}`;
 
   try {
     const response = await anthropic.messages.create(

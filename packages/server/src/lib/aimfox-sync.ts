@@ -383,7 +383,7 @@ export async function backfillAimfoxLeads(
 
             contact = await deps.contacts.create({
               name: richProfile.full_name,
-              email: richProfile.emails?.[0]?.address,
+              email: richProfile.email || richProfile.emails?.[0]?.address,
               linkedinUrl,
               companyId: companyId ?? undefined,
               source: "linkedin",
@@ -392,6 +392,7 @@ export async function backfillAimfoxLeads(
               visibility: "unreviewed",
               aimfoxLeadId: lead.id,
               aimfoxProfileData: richProfile,
+              createdByUserId: options?.ownerId,
             });
             contactsCreated++;
 
@@ -410,11 +411,14 @@ export async function backfillAimfoxLeads(
               await deps.contacts.addOwner(contact.id, options.ownerId);
             }
           } else {
-            // Update existing with profile data if missing
-            if (!contact.aimfox_profile_data) {
+            // Update existing with profile data or email if missing
+            const profileEmail = richProfile.email || richProfile.emails?.[0]?.address;
+            const needsUpdate = !contact.aimfox_profile_data || (!contact.email && profileEmail);
+            if (needsUpdate) {
               await deps.contacts.update(contact.id, {
                 aimfoxProfileData: richProfile,
                 aimfoxLeadId: lead.id,
+                ...(!contact.email && profileEmail ? { email: profileEmail } : {}),
               });
               await deps.contacts.setNeedsClassification([contact.id]);
             }
@@ -424,11 +428,9 @@ export async function backfillAimfoxLeads(
           if (contact) {
             try {
               const convResult = await syncConversation(contact.id, lead.id, deps);
-              // If no messages were synced, clear needs_classification — AI has nothing to work with
+              // If no messages were synced, just clear the flag — don't mark as AI-classified
               if (convResult.synced === 0) {
-                await deps.contacts.updateClassification(contact.id, {
-                  category: "uncategorized",
-                });
+                await deps.contacts.clearNeedsClassification([contact.id]);
               }
             } catch {
               // Conversation sync failure is non-fatal

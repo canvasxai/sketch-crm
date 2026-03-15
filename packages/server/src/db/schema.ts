@@ -147,6 +147,10 @@ export interface TasksTable {
   completed: Generated<boolean>;
   completed_at: string | null;
   created_by: string | null;
+  origin: Generated<string>; // 'manual' | 'crm_ai' | 'slack_ai'
+  source_type: string | null; // 'email' | 'linkedin_message' | 'meeting'
+  source_id: string | null;
+  generation_run_id: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -184,6 +188,7 @@ export interface EmailsTable {
   sent_at: string;
   source: string;
   gmail_message_id: string | null;
+  action_processed_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -200,6 +205,7 @@ export interface LinkedinMessagesTable {
   direction: Generated<string>;
   sent_at: string;
   source: Generated<string>;
+  action_processed_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -218,6 +224,12 @@ export interface MeetingsTable {
   attendees: string | null;
   notes: string | null;
   calendar_event_id: string | null;
+  fireflies_transcript_id: string | null;
+  ai_summary: string | null;
+  action_items: unknown | null; // jsonb
+  keywords: unknown | null; // jsonb
+  duration_minutes: number | null;
+  action_processed_at: string | null;
   source: Generated<string>;
   created_at: Generated<string>;
   updated_at: Generated<string>;
@@ -249,6 +261,8 @@ export interface GmailSyncStateTable {
   companies_created: Generated<number>;
   sync_frequency: Generated<string>;
   sync_period: Generated<string>;
+  oldest_email_at: string | null;
+  newest_email_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -361,6 +375,44 @@ export interface ClassificationLogsTable {
   created_at: Generated<string>;
 }
 
+// ── Meeting Contacts (many-to-many: meetings ↔ contacts) ──
+
+export interface MeetingContactsTable {
+  meeting_id: string;
+  contact_id: string;
+  created_at: Generated<string>;
+}
+
+// ── Fireflies Sync State ──
+
+export interface FirefliesSyncStateTable {
+  id: Generated<string>;
+  last_sync_at: string | null;
+  status: Generated<string>;
+  error_message: string | null;
+  transcripts_synced: Generated<number>;
+  meetings_created: Generated<number>;
+  contacts_matched: Generated<number>;
+  sync_period: Generated<string>;
+  oldest_transcript_at: string | null;
+  newest_transcript_at: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+// ── Action Generation Runs ──
+
+export interface ActionGenerationRunsTable {
+  id: Generated<string>;
+  status: Generated<string>; // 'running' | 'completed' | 'failed' | 'cancelled'
+  total_contacts: Generated<number>;
+  processed_contacts: Generated<number>;
+  tasks_created: Generated<number>;
+  errors: Generated<number>;
+  started_at: Generated<string>;
+  completed_at: string | null;
+}
+
 // ── DB root type ──
 
 export interface DB {
@@ -388,4 +440,7 @@ export interface DB {
   dedup_candidates: DedupCandidatesTable;
   classification_runs: ClassificationRunsTable;
   classification_logs: ClassificationLogsTable;
+  meeting_contacts: MeetingContactsTable;
+  fireflies_sync_state: FirefliesSyncStateTable;
+  action_generation_runs: ActionGenerationRunsTable;
 }

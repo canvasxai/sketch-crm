@@ -85,6 +85,26 @@ export function computeMergeUpdate(
   return update;
 }
 
+// ── AI response helpers ─────────────────────────────────────────────────────
+
+/**
+ * Strips markdown code fences (```json ... ```) that LLMs sometimes wrap
+ * around JSON responses.
+ */
+export function stripMarkdownFences(text: string): string {
+  return text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+}
+
+const VALID_CONFIDENCES = new Set(["high", "medium", "low"]);
+
+/**
+ * Validates a confidence string, returning "low" if the value is invalid.
+ */
+export function normalizeConfidence(value: string | undefined | null): "high" | "medium" | "low" {
+  if (value && VALID_CONFIDENCES.has(value)) return value as "high" | "medium" | "low";
+  return "low";
+}
+
 // ── Name matching ───────────────────────────────────────────────────────────
 
 /**

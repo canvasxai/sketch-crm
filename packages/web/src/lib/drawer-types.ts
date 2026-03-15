@@ -43,6 +43,11 @@ export interface DrawerTimelineEvent {
   completed?: boolean;
   assignee?: string;
   dueDate?: string;
+  // Meeting AI fields (Fireflies)
+  aiSummary?: string;
+  actionItems?: string[];
+  keywords?: string[];
+  durationMinutes?: number;
   // LinkedIn research fields
   cost?: string;
   // Company drawer: which contact this event belongs to

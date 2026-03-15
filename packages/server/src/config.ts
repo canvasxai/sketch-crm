@@ -36,6 +36,13 @@ export const configSchema = z.object({
   AIMFOX_API_KEY: z.string().optional(),
   AIMFOX_WEBHOOK_SECRET: z.string().optional(),
   AIMFOX_ACCOUNT_ID: z.string().default("27947204"),
+
+  // Canvas (optional — for web search and LinkedIn enrichment)
+  CANVAS_API_URL: z.string().url().optional(),
+  CANVAS_API_KEY: z.string().optional(),
+
+  // Fireflies (optional — for meeting transcript integration)
+  FIREFLIES_API_KEY: z.string().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

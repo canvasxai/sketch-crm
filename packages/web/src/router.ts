@@ -1,12 +1,9 @@
 import { createRouter } from "@tanstack/react-router";
 import { activitiesRoute } from "./routes/activities";
-import { companiesRoute } from "./routes/companies";
 import { companyDetailRoute } from "./routes/company-detail";
 import { contactDetailRoute } from "./routes/contact-detail";
-import { contactsRoute } from "./routes/contacts";
 import { dashboardRoute } from "./routes/dashboard";
-import { dedupReviewRoute } from "./routes/dedup-review";
-import { importRoute } from "./routes/import";
+import { directoryRoute } from "./routes/directory";
 import { integrationsRoute } from "./routes/integrations";
 import { loginRoute } from "./routes/login";
 import { pipelineRoute } from "./routes/pipeline";
@@ -18,13 +15,10 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   dashboardRoute.addChildren([
     pipelineRoute,
-    companiesRoute,
+    directoryRoute,
     companyDetailRoute,
-    contactsRoute,
     contactDetailRoute,
-    dedupReviewRoute,
     activitiesRoute,
-    importRoute,
     teamRoute,
     integrationsRoute,
     settingsRoute,

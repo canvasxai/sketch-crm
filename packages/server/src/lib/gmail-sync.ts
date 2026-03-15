@@ -11,8 +11,9 @@ import type { createGmailSyncStateRepository } from "../db/repositories/gmail-sy
 import type { createOrgSettingsRepository } from "../db/repositories/org-settings.js";
 import type { createUsersRepository } from "../db/repositories/users.js";
 import type { createMutedDomainsRepository } from "../db/repositories/muted-domains.js";
-import { domainToCompanyName, extractDomain, isPersonalEmailDomain } from "./domains.js";
+import { extractDomain, isPersonalEmailDomain } from "./domains.js";
 import { GmailClient, extractAllParticipants, extractBody, getHeader, parseEmailAddress } from "./gmail.js";
+import { findOrCreateContactByEmail } from "./contact-matcher.js";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const BATCH_SIZE = 50;
@@ -20,6 +21,11 @@ const MAX_CONCURRENT_FETCHES = 10;
 const MAX_BODY_LENGTH = 50_000;
 
 type SyncPeriod = "5days" | "1month" | "3months" | "6months" | "1year" | "all";
+
+export interface SyncDateRange {
+  after: string; // ISO date string
+  before: string; // ISO date string
+}
 
 interface SyncDeps {
   users: ReturnType<typeof createUsersRepository>;
@@ -36,6 +42,8 @@ export interface SyncResult {
   contactsCreated: number;
   companiesCreated: number;
   ownersAssigned: number;
+  oldestEmailAt: string | null;
+  newestEmailAt: string | null;
   errors: string[];
 }
 
@@ -105,6 +113,16 @@ async function getValidToken(
 }
 
 /**
+ * Formats a Date as YYYY/MM/DD for Gmail query.
+ */
+function formatGmailDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}/${m}/${d}`;
+}
+
+/**
  * Builds a Gmail search query for the given sync period.
  */
 function buildDateQuery(syncPeriod: SyncPeriod): string {
@@ -120,10 +138,17 @@ function buildDateQuery(syncPeriod: SyncPeriod): string {
 
   const days = ms[syncPeriod] ?? 90;
   const date = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `after:${y}/${m}/${d}`;
+  return `after:${formatGmailDate(date)}`;
+}
+
+/**
+ * Builds a Gmail search query from absolute date range.
+ */
+function buildDateRangeQuery(range: SyncDateRange): string {
+  const parts: string[] = [];
+  parts.push(`after:${formatGmailDate(new Date(range.after))}`);
+  parts.push(`before:${formatGmailDate(new Date(range.before))}`);
+  return parts.join(" ");
 }
 
 /**
@@ -169,18 +194,21 @@ async function fetchMessagesInBatch(
 
 /**
  * Main sync function — fetches Gmail emails and creates contacts/companies.
+ * Accepts either a relative SyncPeriod or an absolute SyncDateRange.
  */
 export async function syncGmailEmails(
   deps: SyncDeps,
   config: Config,
   userId: string,
-  syncPeriod: SyncPeriod,
+  syncPeriodOrRange: SyncPeriod | SyncDateRange,
 ): Promise<SyncResult> {
   const result: SyncResult = {
     emailsSynced: 0,
     contactsCreated: 0,
     companiesCreated: 0,
     ownersAssigned: 0,
+    oldestEmailAt: null,
+    newestEmailAt: null,
     errors: [],
   };
 
@@ -220,7 +248,9 @@ export async function syncGmailEmails(
         : configuredInternalDomains;
     const mutedDomains = await deps.mutedDomains.getDomainList();
 
-    const query = buildDateQuery(syncPeriod);
+    const query = typeof syncPeriodOrRange === "string"
+      ? buildDateQuery(syncPeriodOrRange)
+      : buildDateRangeQuery(syncPeriodOrRange);
     let pageToken: string | undefined;
 
     // Paginate through all messages
@@ -242,6 +272,17 @@ export async function syncGmailEmails(
           continue;
         }
 
+        // Track oldest/newest email timestamps
+        if (message.internalDate) {
+          const emailDate = new Date(Number.parseInt(message.internalDate)).toISOString();
+          if (!result.oldestEmailAt || emailDate < result.oldestEmailAt) {
+            result.oldestEmailAt = emailDate;
+          }
+          if (!result.newestEmailAt || emailDate > result.newestEmailAt) {
+            result.newestEmailAt = emailDate;
+          }
+        }
+
         try {
           await processMessage(message, userEmail, userId, internalDomains, mutedDomains, deps, result);
         } catch (err) {
@@ -259,6 +300,17 @@ export async function syncGmailEmails(
       pageToken = listResponse.nextPageToken;
     } while (pageToken);
 
+    // Merge date range with existing state — expand the window, never shrink
+    const existingState = await deps.gmailSyncState.findByUser(userId);
+    const existingOldest = existingState?.oldest_email_at ?? null;
+    const existingNewest = existingState?.newest_email_at ?? null;
+    const finalOldest = existingOldest && result.oldestEmailAt
+      ? (existingOldest < result.oldestEmailAt ? existingOldest : result.oldestEmailAt)
+      : result.oldestEmailAt ?? existingOldest;
+    const finalNewest = existingNewest && result.newestEmailAt
+      ? (existingNewest > result.newestEmailAt ? existingNewest : result.newestEmailAt)
+      : result.newestEmailAt ?? existingNewest;
+
     // Mark sync complete
     await deps.gmailSyncState.upsert(userId, {
       status: "idle",
@@ -266,6 +318,8 @@ export async function syncGmailEmails(
       emailsSynced: result.emailsSynced,
       contactsCreated: result.contactsCreated,
       companiesCreated: result.companiesCreated,
+      oldestEmailAt: finalOldest,
+      newestEmailAt: finalNewest,
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown sync error";
@@ -365,89 +419,18 @@ async function processMessage(
     // Skip internal domain participants (don't create contacts for them)
     if (isInternalDomain(participantEmail, internalDomains)) continue;
 
-    // Find or create contact
-    const duplicate = await deps.contacts.findDuplicate({
-      email: participantEmail,
-    });
+    const name = extractDisplayName(participantEmail, allParticipants, message);
+    const match = await findOrCreateContactByEmail(
+      participantEmail,
+      name,
+      "gmail",
+      { contacts: deps.contacts, companies: deps.companies },
+      { createdByUserId: syncingUserId },
+    );
 
-    let contactId: string;
-
-    if (duplicate) {
-      contactId = duplicate.contact.id;
-
-      // Append this email to the contact's emails array if not already tracked
-      if (duplicate.contact.email?.toLowerCase() !== participantEmail.toLowerCase()) {
-        await deps.contacts.appendEmail(contactId, {
-          email: participantEmail,
-          type: "work",
-          isPrimary: false,
-        });
-      }
-    } else {
-      // No email match — try Tier 2 (name + company domain) before creating
-      const name = extractDisplayName(participantEmail, allParticipants, message);
-      let companyId: string | null = null;
-      let companyCategory: string | null = null;
-      const domain = extractDomain(participantEmail);
-
-      if (domain && !isPersonalEmailDomain(domain)) {
-        // Business domain — auto-create company
-        const company = await deps.companies.findOrCreateByDomain(domain, {
-          name: domainToCompanyName(domain),
-          source: "email_domain",
-        });
-        companyId = company.id;
-        companyCategory = company.category ?? null;
-        const timeDiff = Date.now() - new Date(company.created_at).getTime();
-        if (timeDiff < 5000) {
-          result.companiesCreated++;
-        }
-      }
-
-      // Tier 2: Try name + company domain match
-      const tier2Match = domain
-        ? await deps.contacts.findDuplicate({ name, companyDomain: domain })
-        : null;
-
-      if (tier2Match) {
-        contactId = tier2Match.contact.id;
-        // Merge: append this email and fill missing fields
-        await deps.contacts.appendEmail(contactId, {
-          email: participantEmail,
-          type: "work",
-          isPrimary: false,
-        });
-        if (!tier2Match.contact.email) {
-          await deps.contacts.update(contactId, { email: participantEmail });
-        }
-        if (!tier2Match.contact.company_id && companyId) {
-          await deps.contacts.update(contactId, { companyId });
-        }
-        // Flag for re-classification since new data was merged
-        await deps.contacts.setNeedsClassification([contactId]);
-      } else {
-        // No match — create new contact
-        const contact = await deps.contacts.create({
-          name,
-          email: participantEmail,
-          source: "gmail",
-          companyId: companyId ?? undefined,
-          visibility: "unreviewed",
-          createdByUserId: syncingUserId,
-        });
-        contactId = contact.id;
-        result.contactsCreated++;
-
-        // Inherit company category if already classified
-        if (companyCategory && companyCategory !== "uncategorized") {
-          await deps.contacts.updateClassification(contactId, {
-            category: companyCategory,
-          });
-        }
-      }
-    }
-
-    contactIds.add(contactId!);
+    if (match.created) result.contactsCreated++;
+    if (match.companyCreated) result.companiesCreated++;
+    contactIds.add(match.contactId);
   }
 
   // ── Owner assignment: all internal-domain participants become owners ──

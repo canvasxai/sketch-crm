@@ -16,7 +16,7 @@ function CompanyDetailRedirect() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    navigate({ to: "/companies", search: { open: id }, replace: true });
+    navigate({ to: "/directory", search: { tab: "companies", search: "", category: "", visibility: "", ownerId: "", page: 1, open: id }, replace: true });
   }, [id, navigate]);
 
   return null;

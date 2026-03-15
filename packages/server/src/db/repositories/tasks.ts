@@ -82,6 +82,16 @@ export function createTasksRepository(db: Kysely<DB>) {
         .executeTakeFirst();
     },
 
+    async listOpenByContact(contactId: string) {
+      return db
+        .selectFrom("tasks")
+        .selectAll()
+        .where("contact_id", "=", contactId)
+        .where("completed", "=", false)
+        .orderBy("created_at", "desc")
+        .execute();
+    },
+
     async create(data: {
       contactId?: string;
       companyId?: string;
@@ -90,6 +100,10 @@ export function createTasksRepository(db: Kysely<DB>) {
       assigneeId?: string;
       dueDate?: string;
       createdBy?: string;
+      origin?: string;
+      sourceType?: string;
+      sourceId?: string;
+      generationRunId?: string;
     }) {
       const task = await db
         .insertInto("tasks")
@@ -101,6 +115,10 @@ export function createTasksRepository(db: Kysely<DB>) {
           assignee_id: data.assigneeId ?? null,
           due_date: data.dueDate ?? null,
           created_by: data.createdBy ?? null,
+          ...(data.origin !== undefined ? { origin: data.origin } : {}),
+          source_type: data.sourceType ?? null,
+          source_id: data.sourceId ?? null,
+          generation_run_id: data.generationRunId ?? null,
         })
         .returningAll()
         .executeTakeFirstOrThrow();

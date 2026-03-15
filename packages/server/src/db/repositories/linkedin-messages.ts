@@ -33,6 +33,25 @@ export function createLinkedinMessagesRepository(db: Kysely<DB>) {
       return query.execute();
     },
 
+    async findUnprocessedActivities(contactId: string) {
+      return db
+        .selectFrom("linkedin_messages")
+        .selectAll()
+        .where("contact_id", "=", contactId)
+        .where("action_processed_at", "is", null)
+        .orderBy("sent_at", "desc")
+        .execute();
+    },
+
+    async markActionProcessed(ids: string[]) {
+      if (ids.length === 0) return;
+      await db
+        .updateTable("linkedin_messages")
+        .set({ action_processed_at: new Date().toISOString() })
+        .where("id", "in", ids)
+        .execute();
+    },
+
     async findById(id: string) {
       return db
         .selectFrom("linkedin_messages")

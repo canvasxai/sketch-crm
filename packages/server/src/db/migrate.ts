@@ -18,6 +18,13 @@ import * as m011 from "./migrations/011-pipeline-opportunities.js";
 import * as m012 from "./migrations/012-dedup-and-classification.js";
 import * as m013 from "./migrations/013-classification-logs-and-flags.js";
 import * as m014 from "./migrations/014-contact-ai-confidence.js";
+import * as m015 from "./migrations/015-linkedin-enrichment.js";
+import * as m016 from "./migrations/016-dedup-checked-at.js";
+import * as m017 from "./migrations/017-decision-maker.js";
+import * as m018 from "./migrations/018-rename-pipeline-to-category.js";
+import * as m019 from "./migrations/019-gmail-date-range.js";
+import * as m020 from "./migrations/020-fireflies-integration.js";
+import * as m021 from "./migrations/021-action-generator.js";
 import type { DB } from "./schema.js";
 
 export async function runMigrations(db: Kysely<DB>): Promise<void> {
@@ -40,6 +47,13 @@ export async function runMigrations(db: Kysely<DB>): Promise<void> {
           "012-dedup-and-classification": m012,
           "013-classification-logs-and-flags": m013,
           "014-contact-ai-confidence": m014,
+          "015-linkedin-enrichment": m015,
+          "016-dedup-checked-at": m016,
+          "017-decision-maker": m017,
+          "018-rename-pipeline-to-category": m018,
+          "019-gmail-date-range": m019,
+          "020-fireflies-integration": m020,
+          "021-action-generator": m021,
         };
       },
     },

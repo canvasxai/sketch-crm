@@ -4,7 +4,6 @@ import {
   GearSix,
   LinkedinLogo,
   Plus,
-  Storefront,
   X,
 } from "@phosphor-icons/react";
 import { createRoute } from "@tanstack/react-router";
@@ -23,11 +22,8 @@ import {
   useUpdateGmailSyncFrequency,
 } from "@/hooks/use-integrations";
 import {
-  useAddVendorDomain,
   useInternalDomains,
-  useRemoveVendorDomain,
   useUpdateInternalDomains,
-  useVendorDomains,
 } from "@/hooks/use-settings";
 import { dashboardRoute } from "./dashboard";
 
@@ -51,11 +47,6 @@ function SettingsPage() {
   const updateDomainsMutation = useUpdateInternalDomains();
   const [newDomain, setNewDomain] = useState("");
 
-  const { data: vendorDomainsData, isLoading: vendorDomainsLoading } = useVendorDomains();
-  const addVendorDomainMutation = useAddVendorDomain();
-  const removeVendorDomainMutation = useRemoveVendorDomain();
-  const [newVendorDomain, setNewVendorDomain] = useState("");
-
   const { data: sourceStatus, isLoading: statusLoading } = useSourceStatus();
   const updateGmailFrequency = useUpdateGmailSyncFrequency();
   const updateCalendarFrequency = useUpdateCalendarSyncFrequency();
@@ -63,7 +54,6 @@ function SettingsPage() {
   const { data: aimfoxAccountsData, isLoading: accountsLoading } = useAimfoxAccounts();
 
   const domains = domainsData?.domains ?? [];
-  const vendorDomains = vendorDomainsData?.domains ?? [];
   const aimfoxAccounts = aimfoxAccountsData?.accounts ?? [];
 
   function handleAdd() {
@@ -85,28 +75,6 @@ function SettingsPage() {
     if (e.key === "Enter") {
       e.preventDefault();
       handleAdd();
-    }
-  }
-
-  function handleAddVendorDomain() {
-    const domain = newVendorDomain.trim().toLowerCase();
-    if (!domain) return;
-    if (vendorDomains.some((d) => d.domain === domain)) {
-      setNewVendorDomain("");
-      return;
-    }
-    addVendorDomainMutation.mutate({ domain, source: "manual" });
-    setNewVendorDomain("");
-  }
-
-  function handleRemoveVendorDomain(id: string) {
-    removeVendorDomainMutation.mutate(id);
-  }
-
-  function handleVendorKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleAddVendorDomain();
     }
   }
 
@@ -347,79 +315,6 @@ function SettingsPage() {
               </div>
             </div>
 
-            {/* Vendor / Promotional Domains */}
-            <div className="rounded-lg border border-border bg-card p-6">
-              <div className="flex items-start gap-3">
-                <div className="flex size-9 items-center justify-center rounded-md bg-orange-500/10">
-                  <Storefront size={18} className="text-orange-500" />
-                </div>
-                <div className="flex-1">
-                  <h2 className="text-sm font-semibold">Vendor / Promotional Domains</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Emails from these domains (e.g. SaaS vendors, newsletters) will be skipped during Gmail sync. Gmail
-                    promotional emails are also filtered automatically.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4">
-                {vendorDomainsLoading ? (
-                  <div className="space-y-2">
-                    <Skeleton className="h-8 w-48" />
-                    <Skeleton className="h-8 w-36" />
-                  </div>
-                ) : (
-                  <>
-                    {vendorDomains.length > 0 && (
-                      <div className="mb-4 flex flex-wrap gap-2">
-                        {vendorDomains.map((vd) => (
-                          <Badge key={vd.id} variant="secondary" className="gap-1 pl-2.5 pr-1 py-1 text-sm">
-                            {vd.domain}
-                            {vd.source === "ai" && (
-                              <span className="ml-1 text-[10px] text-muted-foreground/60">AI</span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveVendorDomain(vd.id)}
-                              className="ml-1 rounded-sm p-0.5 hover:bg-muted-foreground/20 transition-colors"
-                              disabled={removeVendorDomainMutation.isPending}
-                            >
-                              <X size={12} />
-                            </button>
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="e.g. letta.ai"
-                        value={newVendorDomain}
-                        onChange={(e) => setNewVendorDomain(e.target.value)}
-                        onKeyDown={handleVendorKeyDown}
-                        className="max-w-xs"
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={handleAddVendorDomain}
-                        disabled={!newVendorDomain.trim() || addVendorDomainMutation.isPending}
-                      >
-                        <Plus size={14} />
-                        Add
-                      </Button>
-                    </div>
-
-                    {vendorDomains.length === 0 && (
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        No vendor domains configured. Add domains of SaaS tools, newsletters, and other non-lead senders
-                        to filter them out.
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
           </div>
         </section>
       </div>

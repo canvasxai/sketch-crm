@@ -72,3 +72,45 @@ export function useClassificationHistory(contactId: string) {
     enabled: !!contactId,
   });
 }
+
+/**
+ * Returns count of contacts needing human review (low confidence + uncategorized).
+ */
+export function useNeedsReviewCount() {
+  return useQuery({
+    queryKey: ["review-queue", "count"],
+    queryFn: () => api.classify.needsReviewCount(),
+    select: (data) => data.count,
+    refetchInterval: 60_000,
+  });
+}
+
+/**
+ * Returns list of contacts needing human review.
+ */
+export function useNeedsReviewList() {
+  return useQuery({
+    queryKey: ["review-queue", "list"],
+    queryFn: () => api.classify.needsReviewList(),
+    select: (data) => data.contacts,
+  });
+}
+
+/**
+ * Confirm or correct a contact's classification.
+ */
+export function useConfirmClassification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ contactId, category }: { contactId: string; category: string }) =>
+      api.classify.confirmClassification(contactId, category),
+    onSuccess: () => {
+      toast.success("Classification confirmed");
+      queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to confirm: ${error.message}`);
+    },
+  });
+}

@@ -2,16 +2,20 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 
-export function useSourceStatus() {
+export function useSourceStatus(opts?: { fastPoll?: boolean }) {
   return useQuery({
     queryKey: ["integrations", "source-status"],
     queryFn: () => api.integrations.sourceStatus(),
     refetchInterval: (query) => {
+      // Fast-poll mode: always poll every 3s (used during ingestion progress)
+      if (opts?.fastPoll) return 3000;
+
       const data = query.state.data;
       const anySyncing =
         data?.gmail.status === "syncing" ||
         data?.google_calendar.status === "syncing" ||
-        data?.linkedin.status === "syncing";
+        data?.linkedin.status === "syncing" ||
+        data?.fireflies?.status === "syncing";
       return anySyncing ? 5000 : 60_000;
     },
   });
@@ -32,8 +36,8 @@ export function useGmailStatus() {
 export function useGmailSync() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (syncPeriod: string) =>
-      api.integrations.gmailSync({ syncPeriod }),
+    mutationFn: (params: { syncPeriod: string } | { after: string; before: string }) =>
+      api.integrations.gmailSync(params),
     onSuccess: (data) => {
       toast.success(
         `Synced ${data.result.emailsSynced} emails, ${data.result.contactsCreated} contacts created`,
@@ -128,6 +132,35 @@ export function useCancelGmailSync() {
     mutationFn: () => api.integrations.cancelGmailSync(),
     onSuccess: () => {
       toast.success("Gmail import cancelled");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function useFirefliesSync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { after: string; before: string }) =>
+      api.integrations.firefliesSync(params),
+    onSuccess: () => {
+      toast.success("Fireflies sync started");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function useCancelFirefliesSync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.integrations.cancelFirefliesSync(),
+    onSuccess: () => {
+      toast.success("Fireflies sync cancelled");
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
     },
     onError: (error: Error) => {

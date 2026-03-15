@@ -4,6 +4,7 @@ import type { createContactsRepository } from "../db/repositories/contacts.js";
 import type { createCompaniesRepository } from "../db/repositories/companies.js";
 import type { createEmailsRepository } from "../db/repositories/emails.js";
 import type { createLinkedinMessagesRepository } from "../db/repositories/linkedin-messages.js";
+import type { createMeetingsRepository } from "../db/repositories/meetings.js";
 import type { createDedupCandidatesRepository } from "../db/repositories/dedup-candidates.js";
 import type { createClassificationRunsRepository } from "../db/repositories/classification-runs.js";
 import type { createClassificationLogsRepository } from "../db/repositories/classification-logs.js";
@@ -12,6 +13,7 @@ import { createCanvasClient } from "../lib/canvas-client.js";
 import { classifyContact } from "../lib/ai-classifier.js";
 import { runTier3Dedup } from "../lib/ai-dedup.js";
 import { crossSourceDbMatch, enrichContactLinkedin, shouldEnrichForCategory } from "../lib/cross-source-dedup.js";
+import { mergeContacts } from "./contacts.js";
 import { mapRow } from "../lib/map-row.js";
 
 interface ClassificationDeps {
@@ -19,6 +21,7 @@ interface ClassificationDeps {
   companies: ReturnType<typeof createCompaniesRepository>;
   emails: ReturnType<typeof createEmailsRepository>;
   linkedinMessages: ReturnType<typeof createLinkedinMessagesRepository>;
+  meetings: ReturnType<typeof createMeetingsRepository>;
   dedupCandidates: ReturnType<typeof createDedupCandidatesRepository>;
   classificationRuns: ReturnType<typeof createClassificationRunsRepository>;
   classificationLogs: ReturnType<typeof createClassificationLogsRepository>;
@@ -146,11 +149,24 @@ export function classificationRoutes(deps: ClassificationDeps) {
               date: m.sent_at,
             }));
 
+            // Fetch recent meetings with AI summaries
+            const recentMeetings = await deps.meetings.list({
+              contactId: contact.id,
+              limit: 5,
+            });
+
+            const meetingSummaries = recentMeetings
+              .filter((m) => m.ai_summary)
+              .map((m) => ({
+                title: m.title ?? "Meeting",
+                summary: m.ai_summary!,
+                date: m.start_time,
+              }));
+
             // Skip LinkedIn-only contacts with no communication history — AI has nothing to classify
-            if (contact.source === "linkedin" && recentEmails.length === 0 && recentMessages.length === 0) {
-              await deps.contacts.updateClassification(contact.id, {
-                category: "uncategorized",
-              });
+            // Just clear the flag without setting ai_classified_at (avoids review queue)
+            if (contact.source === "linkedin" && recentEmails.length === 0 && recentMessages.length === 0 && meetingSummaries.length === 0) {
+              await deps.contacts.clearNeedsClassification([contact.id]);
               await deps.classificationLogs.create({
                 contactId: contact.id,
                 runId: run.id,
@@ -164,7 +180,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
               continue;
             }
 
-            console.log(`[classification] [${i + 1}/${unclassified.length}] Calling Bedrock for: ${contactLabel} (${recentEmails.length} emails, ${recentMessages.length} messages)`);
+            console.log(`[classification] [${i + 1}/${unclassified.length}] Calling Bedrock for: ${contactLabel} (${recentEmails.length} emails, ${recentMessages.length} messages, ${meetingSummaries.length} meetings)`);
             const bedrockStart = Date.now();
 
             // Classify with AI
@@ -179,7 +195,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
               },
               emailContext,
               messageContext,
-              { signal },
+              { signal, meetingSummaries },
             );
 
             const bedrockMs = Date.now() - bedrockStart;
@@ -233,6 +249,12 @@ export function classificationRoutes(deps: ClassificationDeps) {
                   dedupCandidates: deps.dedupCandidates,
                   canvas: canvasClient,
                   anthropic,
+                  autoMerge: (keepId, mergeId) => mergeContacts(keepId, mergeId, {
+                    contacts: deps.contacts,
+                    emails: deps.emails,
+                    linkedinMessages: deps.linkedinMessages,
+                    dedupCandidates: deps.dedupCandidates,
+                  }),
                 }).catch((err) => {
                   console.error(`[classification] LinkedIn enrichment failed for ${contactLabel}:`, err);
                 });
@@ -492,6 +514,20 @@ export function classificationRoutes(deps: ClassificationDeps) {
       date: m.sent_at,
     }));
 
+    // Fetch recent meetings with AI summaries
+    const recentMeetings = await deps.meetings.list({
+      contactId: contact.id,
+      limit: 5,
+    });
+
+    const meetingSummaries = recentMeetings
+      .filter((m) => m.ai_summary)
+      .map((m) => ({
+        title: m.title ?? "Meeting",
+        summary: m.ai_summary!,
+        date: m.start_time,
+      }));
+
     const result = await classifyContact(
       anthropic,
       {
@@ -503,6 +539,7 @@ export function classificationRoutes(deps: ClassificationDeps) {
       },
       emailContext,
       messageContext,
+      { meetingSummaries },
     );
 
     await deps.contacts.updateClassification(contact.id, {

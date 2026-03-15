@@ -42,8 +42,8 @@ export function useUpdateCompany() {
     onSuccess: (_result, variables) => {
       toast.success("Company updated");
       queryClient.invalidateQueries({ queryKey: ["companies"] });
-      // If we propagated pipeline changes to contacts, refresh contacts too
-      if (variables.data.propagateToContacts) {
+      // Category changes always sync to contacts, so refresh contacts too
+      if (variables.data.category) {
         queryClient.invalidateQueries({ queryKey: ["contacts"] });
       }
     },

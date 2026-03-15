@@ -192,6 +192,8 @@ export async function crossSourceDbMatch(deps: BaseDeps): Promise<BatchResult> {
 interface SingleEnrichDeps extends BaseDeps {
   canvas: CanvasClient;
   anthropic: AnthropicBedrock;
+  /** If provided, auto-merges matched contacts instead of creating dedup candidates. */
+  autoMerge?: (keepContactId: string, mergeContactId: string) => Promise<void>;
 }
 
 // Categories that warrant the cost of web search + Haiku
@@ -206,7 +208,7 @@ export function shouldEnrichForCategory(category: string | null | undefined): bo
 
 // ── LinkedIn URL extraction from web search ──
 
-const LINKEDIN_PROFILE_REGEX = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[\w-]+/gi;
+const LINKEDIN_PROFILE_REGEX = /https?:\/\/(?:[\w-]+\.)?linkedin\.com\/in\/[\w-]+/gi;
 
 function extractLinkedinUrls(
   results: Array<{ url: string; title: string; snippet: string }>,
@@ -298,65 +300,74 @@ export async function enrichContactLinkedin(
 ): Promise<void> {
   try {
     const contact = await deps.contacts.findById(contactId);
-    if (!contact) return;
+    if (!contact) {
+      console.log(`[linkedin-enrich] Contact ${contactId} not found, skipping`);
+      return;
+    }
 
     // Already has LinkedIn URL — nothing to do
-    if (contact.linkedin_url) return;
+    if (contact.linkedin_url) {
+      console.log(`[linkedin-enrich] ${contact.name} already has LinkedIn URL: ${contact.linkedin_url}`);
+      return;
+    }
 
-    // Need company name for the search query
-    if (!contact.company_id) return;
-    const company = await deps.companies.findById(contact.company_id);
-    const companyName = company?.name;
-    if (!companyName) return;
+    // Build search query — use company name if available, otherwise just name + email
+    let companyName: string | null = null;
+    if (contact.company_id) {
+      const company = await deps.companies.findById(contact.company_id);
+      companyName = company?.name ?? null;
+    }
 
-    console.log(`[cross-source-dedup] Pass 2 (web search): enriching ${contact.name} at ${companyName}`);
+    const queryParts = [contact.name];
+    if (companyName) queryParts.push(companyName);
+    else if (contact.email) queryParts.push(contact.email);
+    queryParts.push("LinkedIn");
+    const query = queryParts.join(" ");
+    console.log(`[linkedin-enrich] Searching: ${query}`);
 
-    // Search for LinkedIn profile
-    const query = `"${contact.name}" "${companyName}" site:linkedin.com/in/`;
     const searchResults = await deps.canvas.webSearch(query, 5);
-    const linkedinProfiles = extractLinkedinUrls(searchResults);
+    console.log(`[linkedin-enrich] Canvas returned ${searchResults.length} results:`, searchResults.map(r => r.url));
 
-    if (linkedinProfiles.length === 0) {
-      console.log(`[cross-source-dedup] No LinkedIn profiles found for ${contact.name}`);
+    if (searchResults.length === 0) {
+      console.log(`[linkedin-enrich] No search results for ${contact.name}`);
       await deps.contacts.markLinkedinEnriched(contact.id);
       return;
     }
 
+    // Let Haiku pick the best LinkedIn profile from all search results
+    console.log(`[linkedin-enrich] Asking Haiku to pick from ${searchResults.length} results...`);
+    const disambiguation = await disambiguateWithHaiku(
+      deps.anthropic,
+      contact.name,
+      contact.email ?? "",
+      companyName ?? "",
+      searchResults,
+    );
+    console.log(`[linkedin-enrich] Haiku response:`, JSON.stringify(disambiguation));
+
     let chosenUrl: string | null = null;
     let reason = "";
 
-    if (linkedinProfiles.length === 1) {
-      // Single result — confirm with Haiku
-      const confirmation = await disambiguateWithHaiku(
-        deps.anthropic,
-        contact.name,
-        contact.email ?? "",
-        companyName,
-        linkedinProfiles,
-      );
-      if (confirmation.matchIndex === 0 && confirmation.confidence !== "low") {
-        chosenUrl = linkedinProfiles[0].url;
-        reason = `Web search + AI confirmed (${confirmation.confidence}: ${confirmation.reason})`;
+    if (
+      disambiguation.matchIndex !== null &&
+      disambiguation.confidence !== "low" &&
+      disambiguation.matchIndex < searchResults.length
+    ) {
+      const chosen = searchResults[disambiguation.matchIndex];
+      // Extract LinkedIn profile URL — Haiku may pick a result that's a LinkedIn /in/ URL or a /posts/ URL
+      const profileMatch = chosen.url.match(/https?:\/\/(?:[\w-]+\.)?linkedin\.com\/in\/[\w-]+/i);
+      if (profileMatch) {
+        chosenUrl = profileMatch[0];
+        reason = `Web search + AI selected (${disambiguation.confidence}: ${disambiguation.reason})`;
+      } else {
+        console.log(`[linkedin-enrich] Haiku picked non-profile URL: ${chosen.url}`);
       }
     } else {
-      // Multiple results — Haiku picks the best one
-      const disambiguation = await disambiguateWithHaiku(
-        deps.anthropic,
-        contact.name,
-        contact.email ?? "",
-        companyName,
-        linkedinProfiles,
-      );
-
-      if (
-        disambiguation.matchIndex !== null &&
-        disambiguation.confidence !== "low" &&
-        disambiguation.matchIndex < linkedinProfiles.length
-      ) {
-        chosenUrl = linkedinProfiles[disambiguation.matchIndex].url;
-        reason = `Web search + AI disambiguated (${disambiguation.confidence}: ${disambiguation.reason})`;
-      }
+      console.log(`[linkedin-enrich] Haiku could not find a match (matchIndex=${disambiguation.matchIndex}, confidence=${disambiguation.confidence})`);
     }
+
+    console.log(`[linkedin-enrich] Result for ${contact.name}: ${chosenUrl ?? "no match"}`);
+
 
     if (chosenUrl) {
       const normalizedUrl = normalizeLinkedinUrl(chosenUrl);
@@ -367,17 +378,39 @@ export async function enrichContactLinkedin(
       // Check for cross-source match
       const existingContact = await deps.contacts.findByLinkedinUrl(normalizedUrl);
       if (existingContact && existingContact.id !== contact.id) {
-        const alreadyExists = await deps.dedupCandidates.existsPair(contact.id, existingContact.id);
-        if (!alreadyExists) {
-          await deps.dedupCandidates.create({
-            contactIdA: contact.id,
-            contactIdB: existingContact.id,
-            matchReason: `Cross-source: ${reason}`,
-            aiConfidence: "high",
-          });
-          console.log(
-            `[cross-source-dedup] Match: ${contact.name} (gmail) ↔ ${existingContact.name} (linkedin) via ${normalizedUrl}`,
-          );
+        if (deps.autoMerge) {
+          // Auto-merge: keep the LinkedIn contact (richer profile), merge the Gmail one into it
+          try {
+            await deps.autoMerge(existingContact.id, contact.id);
+            console.log(
+              `[cross-source-dedup] Auto-merged: ${contact.name} (gmail) → ${existingContact.name} (linkedin) via ${normalizedUrl}`,
+            );
+          } catch (err) {
+            console.error(`[cross-source-dedup] Auto-merge failed, creating dedup candidate instead:`, err);
+            // Fall back to dedup candidate
+            const alreadyExists = await deps.dedupCandidates.existsPair(contact.id, existingContact.id);
+            if (!alreadyExists) {
+              await deps.dedupCandidates.create({
+                contactIdA: contact.id,
+                contactIdB: existingContact.id,
+                matchReason: `Cross-source: ${reason}`,
+                aiConfidence: "high",
+              });
+            }
+          }
+        } else {
+          const alreadyExists = await deps.dedupCandidates.existsPair(contact.id, existingContact.id);
+          if (!alreadyExists) {
+            await deps.dedupCandidates.create({
+              contactIdA: contact.id,
+              contactIdB: existingContact.id,
+              matchReason: `Cross-source: ${reason}`,
+              aiConfidence: "high",
+            });
+            console.log(
+              `[cross-source-dedup] Match: ${contact.name} (gmail) ↔ ${existingContact.name} (linkedin) via ${normalizedUrl}`,
+            );
+          }
         }
       }
 

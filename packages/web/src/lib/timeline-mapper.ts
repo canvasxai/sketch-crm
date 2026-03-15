@@ -9,6 +9,25 @@ import type {
 } from "@crm/shared";
 import type { DrawerTimelineEvent, DrawerTimelineEventType } from "./drawer-types";
 
+/** Lightweight markdown → HTML for Fireflies summaries (bold, bullets, newlines) */
+function simpleMarkdownToHtml(md: string): string {
+  return md
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return "";
+      // Bold: **text**
+      const withBold = trimmed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      // Bullet lines
+      if (/^[-•]\s/.test(trimmed)) {
+        return `<li>${withBold.replace(/^[-•]\s*/, "")}</li>`;
+      }
+      return `<p>${withBold}</p>`;
+    })
+    .join("")
+    .replace(/(<li>.*?<\/li>)+/g, (match) => `<ul>${match}</ul>`);
+}
+
 /**
  * Map an API TimelineEntry to the richer DrawerTimelineEvent format
  * used by the company/contact detail drawers.
@@ -59,12 +78,40 @@ export function mapTimelineEntry(entry: TimelineEntry, contactName?: string): Dr
     }
     case "meeting": {
       const meeting = entry.data as Meeting;
+      const raw = entry.data as unknown as Record<string, unknown>;
+      const aiSummary = (raw.ai_summary ?? raw.aiSummary) as string | null;
+      const rawActionItems = raw.action_items ?? raw.actionItems;
+      const rawKeywords = raw.keywords ?? raw.keywords;
+      const durationMinutes = (raw.duration_minutes ?? raw.durationMinutes) as number | null;
+
+      // action_items can be a string (from Fireflies) or string[]
+      const actionItems: string[] = Array.isArray(rawActionItems)
+        ? rawActionItems
+        : typeof rawActionItems === "string" && rawActionItems.trim()
+          ? rawActionItems.split("\n").filter((l: string) => l.trim())
+          : [];
+
+      // keywords can be a string[] or comma-separated string
+      const keywords: string[] = Array.isArray(rawKeywords)
+        ? rawKeywords
+        : typeof rawKeywords === "string" && rawKeywords.trim()
+          ? rawKeywords.split(",").map((k: string) => k.trim()).filter(Boolean)
+          : [];
+
+      // Convert markdown summary to simple HTML for rendering
+      const descriptionHtml = aiSummary ? simpleMarkdownToHtml(aiSummary) : undefined;
+
       return {
         ...base,
         type: "meeting" as DrawerTimelineEventType,
         title: meeting.title ?? "Untitled meeting",
         location: meeting.location ?? undefined,
-        description: meeting.description ?? undefined,
+        description: aiSummary ?? meeting.description ?? undefined,
+        descriptionHtml,
+        aiSummary: aiSummary ?? undefined,
+        actionItems: actionItems.length > 0 ? actionItems : undefined,
+        keywords: keywords.length > 0 ? keywords : undefined,
+        durationMinutes: durationMinutes ?? undefined,
       };
     }
     case "note": {

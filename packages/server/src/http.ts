@@ -49,8 +49,11 @@ import { createClassificationRunsRepository } from "./db/repositories/classifica
 import { createClassificationLogsRepository } from "./db/repositories/classification-logs.js";
 import { createAimfoxSyncStateRepository } from "./db/repositories/aimfox-sync-state.js";
 import { createAimfoxWebhookLogRepository } from "./db/repositories/aimfox-webhook-log.js";
+import { createFirefliesSyncStateRepository } from "./db/repositories/fireflies-sync-state.js";
+import { createActionGenerationRunsRepository } from "./db/repositories/action-generation-runs.js";
 import type { DB } from "./db/schema.js";
 import { webhookRoutes } from "./api/webhooks.js";
+import { actionsRoutes } from "./api/actions.js";
 
 export function createApp(db: Kysely<DB>, config: Config) {
   const app = new Hono();
@@ -78,6 +81,8 @@ export function createApp(db: Kysely<DB>, config: Config) {
   const classificationLogs = createClassificationLogsRepository(db);
   const aimfoxSyncState = createAimfoxSyncStateRepository(db);
   const aimfoxWebhookLog = createAimfoxWebhookLogRepository(db);
+  const firefliesSyncState = createFirefliesSyncStateRepository(db);
+  const actionRuns = createActionGenerationRunsRepository(db);
 
   // Webhook routes — mounted BEFORE auth middleware (not under /api/*)
   app.route("/webhooks", webhookRoutes({
@@ -121,13 +126,16 @@ export function createApp(db: Kysely<DB>, config: Config) {
       mutedDomains,
       aimfoxSyncState,
       aimfoxWebhookLog,
+      firefliesSyncState,
+      meetings,
       config,
     }),
   );
   app.route("/api/pipelines", pipelinesRoutes(pipelines, pipelineStages));
   app.route("/api/pipeline-stages", pipelineStagesRoutes(pipelineStages));
   app.route("/api/opportunities", opportunitiesRoutes(opportunities, opportunityStageChanges));
-  app.route("/api/classify", classificationRoutes({ contacts, companies, emails, linkedinMessages, dedupCandidates, classificationRuns, classificationLogs, config }));
+  app.route("/api/classify", classificationRoutes({ contacts, companies, emails, linkedinMessages, meetings, dedupCandidates, classificationRuns, classificationLogs, config }));
+  app.route("/api/actions", actionsRoutes({ contacts, companies, emails, linkedinMessages, meetings, tasks, actionRuns, config }));
 
   // Static file serving for the SPA (production only — dev uses Vite dev server)
   const webDistDir = resolve(import.meta.dirname, "../../web/dist");

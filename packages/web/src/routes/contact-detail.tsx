@@ -12,7 +12,7 @@ import {
   Plus,
   NoteBlank,
 } from "@phosphor-icons/react";
-import { CONTACT_PIPELINES, type ContactPipeline, type CompanyPipeline } from "@crm/shared";
+import { CONTACT_CATEGORIES, type ContactCategory, type CompanyCategory } from "@crm/shared";
 
 import { useContact, useUpdateContact, useDeleteContact } from "@/hooks/use-contacts";
 import { useCompany } from "@/hooks/use-companies";
@@ -21,6 +21,7 @@ import { useCreateNote } from "@/hooks/use-notes";
 import { useUsers } from "@/hooks/use-users";
 import { useDedupLog, useReviewDedupLog } from "@/hooks/use-dedup-log";
 import { useClassificationHistory } from "@/hooks/use-classify";
+import { useGenerateContactActions } from "@/hooks/use-actions";
 import { PipelineBadge } from "@/components/funnel-stage-badge";
 import { SourceBadge } from "@/components/source-badge";
 import { ProductFlags } from "@/components/product-flags";
@@ -83,6 +84,7 @@ function ContactDetailPage() {
   const deleteMutation = useDeleteContact();
   const createNoteMutation = useCreateNote();
   const reviewDedupMutation = useReviewDedupLog();
+  const generateActionsMutation = useGenerateContactActions();
 
   // ── Note input ──
   const [noteContent, setNoteContent] = useState("");
@@ -103,7 +105,7 @@ function ContactDetailPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editLinkedinUrl, setEditLinkedinUrl] = useState("");
   const [editCompanyId, setEditCompanyId] = useState("");
-  const [editPipeline, setEditPipeline] = useState<ContactPipeline | "__inherit__">("__inherit__");
+  const [editPipeline, setEditPipeline] = useState<ContactCategory | "__inherit__">("__inherit__");
 
   function openEditSheet() {
     if (!contact) return;
@@ -113,7 +115,7 @@ function ContactDetailPage() {
     setEditTitle(contact.title ?? "");
     setEditLinkedinUrl(contact.linkedinUrl ?? "");
     setEditCompanyId(contact.companyId ?? "");
-    setEditPipeline(contact.pipeline ?? "__inherit__");
+    setEditPipeline(contact.category ?? "__inherit__");
     setShowEditSheet(true);
   }
 
@@ -129,7 +131,7 @@ function ContactDetailPage() {
           title: editTitle || undefined,
           linkedinUrl: editLinkedinUrl || undefined,
           companyId: editCompanyId || undefined,
-          pipeline: (editPipeline === "__inherit__" ? null : editPipeline) as ContactPipeline | null,
+          category: (editPipeline === "__inherit__" ? undefined : editPipeline) as ContactCategory | undefined,
         },
       },
       { onSuccess: () => setShowEditSheet(false) },
@@ -141,7 +143,7 @@ function ContactDetailPage() {
 
   function handleDelete() {
     deleteMutation.mutate(id, {
-      onSuccess: () => navigate({ to: "/contacts", search: { search: "", pipeline: "", visibility: "", ownerId: "", page: 1 } }),
+      onSuccess: () => navigate({ to: "/directory", search: { tab: "contacts", search: "", category: "", visibility: "", ownerId: "", page: 1, open: "" } }),
     });
   }
 
@@ -192,12 +194,12 @@ function ContactDetailPage() {
     <div className="mx-auto max-w-3xl px-6 py-8">
       {/* Back link */}
       <Link
-        to="/contacts"
-        search={{ search: "", pipeline: "", visibility: "", ownerId: "", page: 1 }}
+        to="/directory"
+        search={{ tab: "contacts", search: "", category: "", visibility: "", ownerId: "", page: 1, open: "" }}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6"
       >
         <ArrowLeft size={14} />
-        Contacts
+        Directory
       </Link>
 
       {/* Header */}
@@ -218,8 +220,23 @@ function ContactDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {(contact.pipeline || company?.pipeline) && (
-            <PipelineBadge pipeline={(contact.pipeline ?? company?.pipeline)!} />
+          {(contact.category || company?.category) && (
+            <PipelineBadge pipeline={(contact.category ?? company?.category)!} />
+          )}
+          {(contact.category === "sales" || contact.category === "client" || contact.isDecisionMaker) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateActionsMutation.mutate(id)}
+              disabled={generateActionsMutation.isPending}
+            >
+              {generateActionsMutation.isPending ? (
+                <SpinnerGap size={14} className="animate-spin" />
+              ) : (
+                <Sparkle size={14} />
+              )}
+              Generate Actions
+            </Button>
           )}
           <Button variant="outline" size="sm" onClick={openEditSheet}>
             <PencilSimple size={14} />
@@ -400,11 +417,11 @@ function ContactDetailPage() {
               <div key={log.id} className="rounded-lg border border-border bg-card p-3 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs">
-                    <PipelineBadge pipeline={(log.previousPipeline ?? "uncategorized") as CompanyPipeline} />
-                    {log.pipelineAssigned !== log.previousPipeline && (
+                    <PipelineBadge pipeline={(log.previousCategory ?? "uncategorized") as CompanyCategory} />
+                    {log.categoryAssigned !== log.previousCategory && (
                       <>
                         <span className="text-muted-foreground">→</span>
-                        <PipelineBadge pipeline={(log.pipelineAssigned ?? "uncategorized") as CompanyPipeline} />
+                        <PipelineBadge pipeline={(log.categoryAssigned ?? "uncategorized") as CompanyCategory} />
                       </>
                     )}
                     {log.confidence && (
@@ -484,14 +501,14 @@ function ContactDetailPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label>Pipeline</Label>
-              <Select value={editPipeline} onValueChange={(v: string) => setEditPipeline(v as ContactPipeline | "__inherit__")}>
+              <Label>Category</Label>
+              <Select value={editPipeline} onValueChange={(v: string) => setEditPipeline(v as ContactCategory | "__inherit__")}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Inherit from company" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__inherit__">Inherit from company</SelectItem>
-                  {CONTACT_PIPELINES.map((p) => (
+                  {CONTACT_CATEGORIES.map((p) => (
                     <SelectItem key={p} value={p}>
                       {p.charAt(0).toUpperCase() + p.slice(1)}
                     </SelectItem>

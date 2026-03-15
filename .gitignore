@@ -6,3 +6,4 @@ data/
 .DS_Store
 *.csv
 .claude/
+packages/server/crm.db

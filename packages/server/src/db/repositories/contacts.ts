@@ -3,13 +3,14 @@ import type { DB } from "../schema.js";
 import { areNamesCompatible } from "../../lib/dedup.js";
 
 export interface ContactFilters {
-  pipeline?: string;
+  category?: string;
   source?: string;
   companyId?: string;
   ownerId?: string;
   isCanvasUser?: boolean;
   isSketchUser?: boolean;
   usesServices?: boolean;
+  isDecisionMaker?: boolean;
   visibility?: string;
   search?: string;
   limit?: number;
@@ -24,8 +25,8 @@ export function createContactsRepository(db: Kysely<DB>) {
     filters: ContactFilters,
     { needsOwnerJoin }: { needsOwnerJoin: boolean } = { needsOwnerJoin: true },
   ) {
-    if (filters.pipeline !== undefined) {
-      query = query.where("contacts.pipeline", "=", filters.pipeline);
+    if (filters.category !== undefined) {
+      query = query.where("contacts.category", "=", filters.category);
     }
     if (filters.source !== undefined) {
       query = query.where("contacts.source", "=", filters.source);
@@ -42,16 +43,23 @@ export function createContactsRepository(db: Kysely<DB>) {
     if (filters.usesServices !== undefined) {
       query = query.where("contacts.uses_services", "=", filters.usesServices);
     }
+    if (filters.isDecisionMaker !== undefined) {
+      query = query.where("contacts.is_decision_maker", "=", filters.isDecisionMaker);
+    }
     if (filters.visibility !== undefined) {
       query = query.where("contacts.visibility", "=", filters.visibility);
     }
     if (filters.search) {
-      query = query.where((eb: any) =>
-        eb.or([
-          eb("contacts.name", "ilike", `%${filters.search}%`),
-          eb("contacts.email", "ilike", `%${filters.search}%`),
-        ]),
-      );
+      query = query
+        .leftJoin("companies as search_co", "search_co.id", "contacts.company_id")
+        .where((eb: any) =>
+          eb.or([
+            eb("contacts.name", "ilike", `%${filters.search}%`),
+            eb("contacts.email", "ilike", `%${filters.search}%`),
+            eb("contacts.title", "ilike", `%${filters.search}%`),
+            eb("search_co.name", "ilike", `%${filters.search}%`),
+          ]),
+        );
     }
     if (filters.ownerId !== undefined && needsOwnerJoin) {
       query = query
@@ -60,11 +68,13 @@ export function createContactsRepository(db: Kysely<DB>) {
     }
 
     // Visibility: shared contacts visible to everyone, private/unreviewed only to creator
+    // Contacts with no creator (e.g. from automated sync) are visible to everyone
     if (filters.currentUserId) {
       query = query.where((eb: any) =>
         eb.or([
           eb("contacts.visibility", "=", "shared"),
           eb("contacts.created_by_user_id", "=", filters.currentUserId),
+          eb("contacts.created_by_user_id", "is", null),
         ]),
       );
     }
@@ -251,6 +261,20 @@ export function createContactsRepository(db: Kysely<DB>) {
       return query.execute();
     },
 
+    async findActionCandidates() {
+      return db
+        .selectFrom("contacts")
+        .select(["id", "name", "email", "title", "company_id", "category", "is_decision_maker"])
+        .where((eb) =>
+          eb.or([
+            eb("category", "in", ["sales", "client"]),
+            eb("is_decision_maker", "=", true),
+          ]),
+        )
+        .orderBy("created_at", "asc")
+        .execute();
+    },
+
     /**
      * Find unclassified contacts (for AI batch processing).
      */
@@ -278,23 +302,36 @@ export function createContactsRepository(db: Kysely<DB>) {
         .updateTable("contacts")
         .set({ needs_classification: true })
         .where("id", "in", ids)
+        .where("ai_classified_at", "is", null)
         .execute();
     },
 
     /**
      * Update AI classification fields on a contact.
      */
-    async updateClassification(id: string, data: { aiSummary: string | null; pipeline?: string | null; aiConfidence?: string | null }) {
+    async clearNeedsClassification(ids: string[]) {
+      if (ids.length === 0) return;
+      await db
+        .updateTable("contacts")
+        .set({ needs_classification: false })
+        .where("id", "in", ids)
+        .execute();
+    },
+
+    async updateClassification(id: string, data: { aiSummary: string | null; category?: string; aiConfidence?: string | null; isDecisionMaker?: boolean }) {
       const values: Record<string, unknown> = {
         ai_summary: data.aiSummary,
         ai_classified_at: sql`now()`,
         needs_classification: false,
       };
-      if (data.pipeline !== undefined) {
-        values.pipeline = data.pipeline;
+      if (data.category !== undefined) {
+        values.category = data.category;
       }
       if (data.aiConfidence !== undefined) {
         values.ai_confidence = data.aiConfidence;
+      }
+      if (data.isDecisionMaker !== undefined) {
+        values.is_decision_maker = data.isDecisionMaker;
       }
 
       return db
@@ -349,10 +386,11 @@ export function createContactsRepository(db: Kysely<DB>) {
       linkedinUrl?: string;
       companyId?: string;
       source: string;
-      pipeline?: string | null;
+      category?: string;
       isCanvasUser?: boolean;
       isSketchUser?: boolean;
       usesServices?: boolean;
+      isDecisionMaker?: boolean;
       canvasSignupDate?: string;
       visibility?: string;
       createdByUserId?: string;
@@ -373,8 +411,8 @@ export function createContactsRepository(db: Kysely<DB>) {
           company_id: data.companyId ?? null,
           source: data.source,
           needs_classification: true,
-          ...(data.pipeline !== undefined
-            ? { pipeline: data.pipeline }
+          ...(data.category !== undefined
+            ? { category: data.category }
             : {}),
           ...(data.isCanvasUser !== undefined
             ? { is_canvas_user: data.isCanvasUser }
@@ -384,6 +422,9 @@ export function createContactsRepository(db: Kysely<DB>) {
             : {}),
           ...(data.usesServices !== undefined
             ? { uses_services: data.usesServices }
+            : {}),
+          ...(data.isDecisionMaker !== undefined
+            ? { is_decision_maker: data.isDecisionMaker }
             : {}),
           canvas_signup_date: data.canvasSignupDate ?? null,
           ...(data.visibility !== undefined
@@ -416,10 +457,11 @@ export function createContactsRepository(db: Kysely<DB>) {
         linkedinUrl: string | null;
         companyId: string | null;
         source: string;
-        pipeline: string | null;
+        category: string;
         isCanvasUser: boolean;
         isSketchUser: boolean;
         usesServices: boolean;
+        isDecisionMaker: boolean;
         canvasSignupDate: string | null;
         visibility: string;
         leadChannel: string | null;
@@ -437,10 +479,11 @@ export function createContactsRepository(db: Kysely<DB>) {
       if (data.linkedinUrl !== undefined) values.linkedin_url = data.linkedinUrl;
       if (data.companyId !== undefined) values.company_id = data.companyId;
       if (data.source !== undefined) values.source = data.source;
-      if (data.pipeline !== undefined) values.pipeline = data.pipeline;
+      if (data.category !== undefined) values.category = data.category;
       if (data.isCanvasUser !== undefined) values.is_canvas_user = data.isCanvasUser;
       if (data.isSketchUser !== undefined) values.is_sketch_user = data.isSketchUser;
       if (data.usesServices !== undefined) values.uses_services = data.usesServices;
+      if (data.isDecisionMaker !== undefined) values.is_decision_maker = data.isDecisionMaker;
       if (data.canvasSignupDate !== undefined) values.canvas_signup_date = data.canvasSignupDate;
       if (data.visibility !== undefined) values.visibility = data.visibility;
       if (data.leadChannel !== undefined) values.lead_channel = data.leadChannel;
@@ -481,12 +524,12 @@ export function createContactsRepository(db: Kysely<DB>) {
     },
 
     /**
-     * Update pipeline for all contacts belonging to a company.
+     * Update category for all contacts belonging to a company.
      */
-    async updatePipelineByCompanyId(companyId: string, pipeline: string) {
+    async updateCategoryByCompanyId(companyId: string, category: string) {
       const result = await db
         .updateTable("contacts")
-        .set({ pipeline })
+        .set({ category })
         .where("company_id", "=", companyId)
         .execute();
 
@@ -505,6 +548,14 @@ export function createContactsRepository(db: Kysely<DB>) {
         .execute();
 
       return result.length > 0 ? Number(result[0].numDeletedRows) : 0;
+    },
+
+    /** Transfer all related records (meetings, tasks, notes, opportunities) from one contact to another. */
+    async transferRelatedRecords(fromContactId: string, toContactId: string) {
+      const tables = ["meetings", "tasks", "notes", "opportunities"] as const;
+      for (const table of tables) {
+        await sql`UPDATE ${sql.table(table)} SET contact_id = ${toContactId} WHERE contact_id = ${fromContactId}`.execute(db);
+      }
     },
 
     async remove(id: string) {
@@ -591,6 +642,146 @@ export function createContactsRepository(db: Kysely<DB>) {
         });
       }
       return result;
+    },
+
+    /**
+     * Find contacts that have an email and company but no LinkedIn URL,
+     * and haven't been checked for LinkedIn enrichment yet.
+     */
+    async findUnenrichedGmailContacts(limit = 50) {
+      return db
+        .selectFrom("contacts")
+        .selectAll()
+        .where("email", "is not", null)
+        .where("linkedin_url", "is", null)
+        .where("linkedin_enriched_at", "is", null)
+        .where("company_id", "is not", null)
+        .orderBy("created_at", "desc")
+        .limit(limit)
+        .execute();
+    },
+
+    /**
+     * Mark a contact as having been checked for LinkedIn enrichment.
+     */
+    async markLinkedinEnriched(id: string) {
+      return db
+        .updateTable("contacts")
+        .set({ linkedin_enriched_at: new Date().toISOString() })
+        .where("id", "=", id)
+        .execute();
+    },
+
+    /**
+     * Find contacts that haven't been checked for Tier 3 (fuzzy name) dedup yet.
+     */
+    async findNeedsDedupCheck(limit = 200) {
+      return db
+        .selectFrom("contacts")
+        .selectAll()
+        .where("dedup_checked_at", "is", null)
+        .where("name", "is not", null)
+        .orderBy("created_at", "desc")
+        .limit(limit)
+        .execute();
+    },
+
+    /**
+     * Mark a contact as having been checked for Tier 3 dedup.
+     */
+    async markDedupChecked(id: string) {
+      return db
+        .updateTable("contacts")
+        .set({ dedup_checked_at: new Date().toISOString() })
+        .where("id", "=", id)
+        .execute();
+    },
+
+    /**
+     * Find contacts that need human review:
+     * - ai_confidence = 'low' (low confidence classification)
+     * - ai_classified_at IS NOT NULL AND pipeline IS NULL (classified but uncategorized)
+     * Excludes contacts already confirmed by a human (ai_confidence = 'confirmed').
+     */
+    async findNeedsReview(limit = 50, offset = 0) {
+      return db
+        .selectFrom("contacts")
+        .leftJoin("companies", "companies.id", "contacts.company_id")
+        .select([
+          "contacts.id",
+          "contacts.name",
+          "contacts.email",
+          "contacts.title",
+          "contacts.linkedin_url",
+          "contacts.company_id",
+          "contacts.source",
+          "contacts.category",
+          "contacts.ai_confidence",
+          "contacts.ai_summary",
+          "contacts.ai_classified_at",
+          "contacts.needs_classification",
+          "contacts.created_at",
+          "contacts.updated_at",
+          "companies.name as company_name",
+        ])
+        .where((eb) =>
+          eb.or([
+            eb("contacts.ai_confidence", "=", "low"),
+            eb.and([
+              eb("contacts.ai_classified_at", "is not", null),
+              eb("contacts.category", "=", "uncategorized"),
+            ]),
+          ]),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("contacts.ai_confidence", "is", null),
+            eb("contacts.ai_confidence", "!=", "confirmed"),
+          ]),
+        )
+        .orderBy("contacts.created_at", "desc")
+        .limit(limit)
+        .offset(offset)
+        .execute();
+    },
+
+    async countNeedsReview() {
+      const result = await db
+        .selectFrom("contacts")
+        .select(db.fn.countAll().as("count"))
+        .where((eb) =>
+          eb.or([
+            eb("ai_confidence", "=", "low"),
+            eb.and([
+              eb("ai_classified_at", "is not", null),
+              eb("category", "=", "uncategorized"),
+            ]),
+          ]),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("ai_confidence", "is", null),
+            eb("ai_confidence", "!=", "confirmed"),
+          ]),
+        )
+        .executeTakeFirstOrThrow();
+      return Number(result.count);
+    },
+
+    /**
+     * Confirm a contact's classification — sets pipeline and marks as human-confirmed.
+     */
+    async confirmClassification(id: string, category: string) {
+      return db
+        .updateTable("contacts")
+        .set({
+          category,
+          ai_confidence: "confirmed",
+          needs_classification: false,
+        })
+        .where("id", "=", id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
     },
   };
 }

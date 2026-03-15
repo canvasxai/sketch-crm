@@ -14,7 +14,17 @@ export function createMeetingsRepository(db: Kysely<DB>) {
         .orderBy("start_time", "desc");
 
       if (opts?.contactId !== undefined) {
-        query = query.where("contact_id", "=", opts.contactId);
+        query = query.where((eb) =>
+          eb.or([
+            eb("meetings.contact_id", "=", opts.contactId!),
+            eb.exists(
+              eb.selectFrom("meeting_contacts")
+                .select("meeting_contacts.meeting_id")
+                .whereRef("meeting_contacts.meeting_id", "=", "meetings.id")
+                .where("meeting_contacts.contact_id", "=", opts.contactId!),
+            ),
+          ]),
+        );
       }
 
       if (opts?.limit !== undefined) {
@@ -44,6 +54,56 @@ export function createMeetingsRepository(db: Kysely<DB>) {
         .executeTakeFirst();
     },
 
+    async findByFirefliesTranscriptId(transcriptId: string) {
+      return db
+        .selectFrom("meetings")
+        .selectAll()
+        .where("fireflies_transcript_id", "=", transcriptId)
+        .executeTakeFirst();
+    },
+
+    async linkContacts(meetingId: string, contactIds: string[]) {
+      if (contactIds.length === 0) return;
+      const rows = contactIds.map((contactId) => ({
+        meeting_id: meetingId,
+        contact_id: contactId,
+      }));
+      await db
+        .insertInto("meeting_contacts")
+        .values(rows)
+        .onConflict((oc) => oc.columns(["meeting_id", "contact_id"]).doNothing())
+        .execute();
+    },
+
+    async findUnprocessedActivities(contactId: string) {
+      return db
+        .selectFrom("meetings")
+        .selectAll()
+        .where((eb) =>
+          eb.or([
+            eb("meetings.contact_id", "=", contactId),
+            eb.exists(
+              eb.selectFrom("meeting_contacts")
+                .select("meeting_contacts.meeting_id")
+                .whereRef("meeting_contacts.meeting_id", "=", "meetings.id")
+                .where("meeting_contacts.contact_id", "=", contactId),
+            ),
+          ]),
+        )
+        .where("action_processed_at", "is", null)
+        .orderBy("start_time", "desc")
+        .execute();
+    },
+
+    async markActionProcessed(ids: string[]) {
+      if (ids.length === 0) return;
+      await db
+        .updateTable("meetings")
+        .set({ action_processed_at: new Date().toISOString() })
+        .where("id", "in", ids)
+        .execute();
+    },
+
     async create(data: {
       contactId: string;
       title?: string;
@@ -55,6 +115,11 @@ export function createMeetingsRepository(db: Kysely<DB>) {
       attendees?: string;
       notes?: string;
       calendarEventId?: string;
+      firefliesTranscriptId?: string;
+      aiSummary?: string;
+      actionItems?: unknown;
+      keywords?: unknown;
+      durationMinutes?: number;
       source?: string;
     }) {
       return db
@@ -70,6 +135,11 @@ export function createMeetingsRepository(db: Kysely<DB>) {
           attendees: data.attendees ?? null,
           notes: data.notes ?? null,
           calendar_event_id: data.calendarEventId ?? null,
+          fireflies_transcript_id: data.firefliesTranscriptId ?? null,
+          ai_summary: data.aiSummary ?? null,
+          action_items: data.actionItems ? JSON.stringify(data.actionItems) : null,
+          keywords: data.keywords ? JSON.stringify(data.keywords) : null,
+          duration_minutes: data.durationMinutes ?? null,
           ...(data.source !== undefined ? { source: data.source } : {}),
         })
         .returningAll()

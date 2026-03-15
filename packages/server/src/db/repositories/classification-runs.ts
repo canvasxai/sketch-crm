@@ -45,12 +45,12 @@ export function createClassificationRunsRepository(db: Kysely<DB>) {
         .executeTakeFirst();
     },
 
-    async incrementProcessed(id: string, pipelineChanged: boolean) {
+    async incrementProcessed(id: string, categoryChanged: boolean) {
       const update: Record<string, unknown> = {
         processed_contacts: sql`processed_contacts + 1`,
       };
-      if (pipelineChanged) {
-        update.pipeline_changes = sql`pipeline_changes + 1`;
+      if (categoryChanged) {
+        update.category_changes = sql`category_changes + 1`;
       }
       return db
         .updateTable("classification_runs")

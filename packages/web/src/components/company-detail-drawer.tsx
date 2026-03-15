@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   CalendarBlank,
   Check,
+  Crown,
   DotsThree,
   EnvelopeSimple,
   FunnelSimple,
@@ -630,10 +631,13 @@ export function CompanyDetailDrawer({ company, onClose, onOpenContact }: Company
                         className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-muted/40 transition-colors"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{contact.name}</p>
+                          <p className="text-sm font-medium truncate flex items-center gap-1">
+                            {contact.name}
+                            {contact.isDecisionMaker && <span title="Decision Maker"><Crown size={11} weight="fill" className="text-amber-500 shrink-0" /></span>}
+                          </p>
                           {contact.title && <p className="text-xs text-muted-foreground truncate">{contact.title}</p>}
                         </div>
-                        <FunnelStageBadge pipeline={contact.pipeline ?? company.pipeline} />
+                        <FunnelStageBadge pipeline={contact.category ?? company.category} />
                       </button>
                     ))}
                   </div>

@@ -473,7 +473,7 @@ function RunningView({
           </div>
           <div>
             <span className="text-muted-foreground">Changes: </span>
-            <span className="font-medium">{run.pipelineChanges}</span>
+            <span className="font-medium">{run.categoryChanges}</span>
           </div>
           {run.errors > 0 && (
             <div>
@@ -592,7 +592,7 @@ function RunDetailView({
         </div>
         <div>
           <span className="text-muted-foreground">Changes: </span>
-          <span className="font-medium">{run.pipelineChanges}</span>
+          <span className="font-medium">{run.categoryChanges}</span>
         </div>
         {run.errors > 0 && (
           <div>
@@ -676,7 +676,7 @@ function RunRow({ run, onClick }: { run: ClassificationRun; onClick: () => void 
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
           <span>{formatDate(run.startedAt)}</span>
-          <span>{run.pipelineChanges} changes</span>
+          <span>{run.categoryChanges} changes</span>
           {run.errors > 0 && <span className="text-red-500">{run.errors} errors</span>}
           <span>{formatDuration(run.startedAt, run.completedAt)}</span>
         </div>
@@ -687,7 +687,7 @@ function RunRow({ run, onClick }: { run: ClassificationRun; onClick: () => void 
 }
 
 function ClassificationLogCard({ log }: { log: ClassificationLogEntry }) {
-  const pipelineChanged = log.pipelineAssigned !== log.previousPipeline;
+  const categoryChanged = log.categoryAssigned !== log.previousCategory;
   const confClass = confidenceColors[log.confidence ?? ""] ?? confidenceColors.low;
 
   return (
@@ -709,11 +709,11 @@ function ClassificationLogCard({ log }: { log: ClassificationLogEntry }) {
         )}
       </div>
       <div className="flex items-center gap-1.5 text-[11px]">
-        <PipelineBadge pipeline={(log.previousPipeline ?? "uncategorized") as CompanyPipeline} />
-        {pipelineChanged ? (
+        <PipelineBadge pipeline={(log.previousCategory ?? "uncategorized") as CompanyPipeline} />
+        {categoryChanged ? (
           <>
             <span className="text-muted-foreground">→</span>
-            <PipelineBadge pipeline={(log.pipelineAssigned ?? "uncategorized") as CompanyPipeline} />
+            <PipelineBadge pipeline={(log.categoryAssigned ?? "uncategorized") as CompanyPipeline} />
           </>
         ) : (
           <span className="text-muted-foreground italic">no change</span>

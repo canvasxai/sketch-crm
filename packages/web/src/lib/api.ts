@@ -2,12 +2,12 @@ import type {
   ClassificationLogEntry,
   ClassificationRun,
   Company,
-  CompanyPipeline,
+  CompanyCategory,
   CompanySource,
   Contact,
   ContactEmailEntry,
   ContactPhoneEntry,
-  ContactPipeline,
+  ContactCategory,
   ContactSource,
   DedupCandidate,
   DedupLogEntry,
@@ -253,6 +253,14 @@ interface ClassificationHistoryResponse {
   logs: ClassificationLogEntry[];
 }
 
+interface NeedsReviewListResponse {
+  contacts: Contact[];
+}
+
+interface NeedsReviewCountResponse {
+  count: number;
+}
+
 interface DedupCandidatesListResponse {
   candidates: DedupCandidate[];
 }
@@ -276,6 +284,8 @@ interface SourceStatusResponse {
     companiesCreated: number;
     syncFrequency: string;
     syncPeriod: string;
+    oldestEmailAt: string | null;
+    newestEmailAt: string | null;
   };
   linkedin: {
     connected: boolean;
@@ -286,6 +296,7 @@ interface SourceStatusResponse {
     leadsSynced: number;
     contactsCreated: number;
     companiesCreated: number;
+    pagesFetched: number;
   };
   canvas_signup: {
     connected: boolean;
@@ -302,6 +313,18 @@ interface SourceStatusResponse {
     meetingsCreated: number;
     syncFrequency: string;
     syncPeriod: string;
+  };
+  fireflies: {
+    connected: boolean;
+    lastSyncAt: string | null;
+    status: string;
+    errorMessage: string | null;
+    transcriptsSynced: number;
+    meetingsCreated: number;
+    contactsMatched: number;
+    syncPeriod: string;
+    oldestTranscriptAt: string | null;
+    newestTranscriptAt: string | null;
   };
 }
 
@@ -346,7 +369,7 @@ export const api = {
   companies: {
     list(params?: {
       search?: string;
-      pipeline?: CompanyPipeline;
+      category?: CompanyCategory;
       limit?: number;
       offset?: number;
     }): Promise<CompanyListResponse> {
@@ -375,7 +398,7 @@ export const api = {
       description?: string;
       techStack?: string;
       fundingStage?: string;
-      pipeline?: CompanyPipeline;
+      category?: CompanyCategory;
     }): Promise<CompanyCreateResponse> {
       return request<CompanyCreateResponse>("/api/companies", {
         method: "POST",
@@ -397,8 +420,7 @@ export const api = {
         description: string;
         techStack: string;
         fundingStage: string;
-        pipeline: CompanyPipeline;
-        propagateToContacts: boolean;
+        category: CompanyCategory;
       }>,
     ): Promise<CompanyUpdateResponse> {
       return request<CompanyUpdateResponse>(`/api/companies/${id}`, {
@@ -428,7 +450,7 @@ export const api = {
 
   contacts: {
     list(params?: {
-      pipeline?: ContactPipeline;
+      category?: ContactCategory;
       source?: ContactSource;
       visibility?: string;
       companyId?: string;
@@ -436,6 +458,7 @@ export const api = {
       isCanvasUser?: boolean;
       isSketchUser?: boolean;
       usesServices?: boolean;
+      isDecisionMaker?: boolean;
       search?: string;
       limit?: number;
       offset?: number;
@@ -460,10 +483,11 @@ export const api = {
       linkedinUrl?: string;
       companyId?: string;
       source: ContactSource;
-      pipeline?: ContactPipeline | null;
+      category?: ContactCategory;
       isCanvasUser?: boolean;
       isSketchUser?: boolean;
       usesServices?: boolean;
+      isDecisionMaker?: boolean;
       canvasSignupDate?: string;
       autoCreateCompany?: boolean;
       visibility?: string;
@@ -487,10 +511,11 @@ export const api = {
         linkedinUrl: string;
         companyId: string;
         source: ContactSource;
-        pipeline: ContactPipeline | null;
+        category: ContactCategory;
         isCanvasUser: boolean;
         isSketchUser: boolean;
         usesServices: boolean;
+        isDecisionMaker: boolean;
         canvasSignupDate: string;
         visibility: string;
         leadChannel: LeadChannel | null;
@@ -533,6 +558,12 @@ export const api = {
     removeOwner(contactId: string, userId: string): Promise<OwnerResponse> {
       return request<OwnerResponse>(`/api/contacts/${contactId}/owners/${userId}`, {
         method: "DELETE",
+      });
+    },
+
+    enrichLinkedin(contactId: string): Promise<{ contact: Contact; linkedinUrl: string | null; alreadyHasLinkedin?: boolean }> {
+      return request(`/api/contacts/${contactId}/enrich-linkedin`, {
+        method: "POST",
       });
     },
   },
@@ -694,7 +725,7 @@ export const api = {
     gmailStatus(): Promise<GmailStatusResponse> {
       return request<GmailStatusResponse>("/api/integrations/gmail/status");
     },
-    gmailSync(body: { syncPeriod: string }): Promise<GmailSyncResponse> {
+    gmailSync(body: { syncPeriod: string } | { after: string; before: string }): Promise<GmailSyncResponse> {
       return request<GmailSyncResponse>("/api/integrations/gmail/sync", {
         method: "POST",
         body: JSON.stringify(body),
@@ -763,6 +794,29 @@ export const api = {
         method: "POST",
       });
     },
+    firefliesStatus(): Promise<{
+      connected: boolean;
+      status: string;
+      lastSyncAt: string | null;
+      errorMessage: string | null;
+      transcriptsSynced: number;
+      meetingsCreated: number;
+      contactsMatched: number;
+      syncPeriod: string;
+    }> {
+      return request("/api/integrations/fireflies/status");
+    },
+    firefliesSync(body: { after: string; before: string }): Promise<{ success: true; message: string }> {
+      return request("/api/integrations/fireflies/sync", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    cancelFirefliesSync(): Promise<{ success: true; wasRunning: boolean }> {
+      return request("/api/integrations/fireflies/cancel", {
+        method: "POST",
+      });
+    },
   },
 
   classify: {
@@ -788,6 +842,22 @@ export const api = {
     },
     cancel(): Promise<{ success: true; wasRunning: boolean }> {
       return request("/api/classify/cancel", { method: "POST" });
+    },
+    needsReviewList(params?: { limit?: number; offset?: number }): Promise<NeedsReviewListResponse> {
+      const qs = new URLSearchParams();
+      if (params?.limit) qs.set("limit", String(params.limit));
+      if (params?.offset) qs.set("offset", String(params.offset));
+      const query = qs.toString();
+      return request<NeedsReviewListResponse>(`/api/classify/contacts/needs-review${query ? `?${query}` : ""}`);
+    },
+    needsReviewCount(): Promise<NeedsReviewCountResponse> {
+      return request<NeedsReviewCountResponse>("/api/classify/contacts/needs-review/count");
+    },
+    confirmClassification(contactId: string, category: string): Promise<{ contact: Contact }> {
+      return request<{ contact: Contact }>(`/api/classify/contacts/${contactId}/confirm-classification`, {
+        method: "POST",
+        body: JSON.stringify({ category }),
+      });
     },
   },
 
@@ -982,6 +1052,60 @@ export const api = {
 
     stageChanges(opportunityId: string): Promise<StageChangesResponse> {
       return request<StageChangesResponse>(`/api/opportunities/${opportunityId}/stage-changes`);
+    },
+  },
+
+  actions: {
+    generate(): Promise<{ runId: string }> {
+      return request("/api/actions/generate", { method: "POST" });
+    },
+    generateForContact(contactId: string): Promise<{ result: { tasksCreated: number } }> {
+      return request(`/api/actions/generate/${contactId}`, { method: "POST" });
+    },
+    runs(): Promise<{
+      runs: Array<{
+        id: string;
+        status: string;
+        totalContacts: number;
+        processedContacts: number;
+        tasksCreated: number;
+        errors: number;
+        startedAt: string;
+        completedAt: string | null;
+      }>;
+    }> {
+      return request("/api/actions/runs");
+    },
+    latestRun(): Promise<{
+      run: {
+        id: string;
+        status: string;
+        totalContacts: number;
+        processedContacts: number;
+        tasksCreated: number;
+        errors: number;
+        startedAt: string;
+        completedAt: string | null;
+      } | null;
+    }> {
+      return request("/api/actions/runs/latest");
+    },
+    run(runId: string): Promise<{
+      run: {
+        id: string;
+        status: string;
+        totalContacts: number;
+        processedContacts: number;
+        tasksCreated: number;
+        errors: number;
+        startedAt: string;
+        completedAt: string | null;
+      };
+    }> {
+      return request(`/api/actions/runs/${runId}`);
+    },
+    cancel(): Promise<{ success: true; wasRunning: boolean }> {
+      return request("/api/actions/cancel", { method: "POST" });
     },
   },
 

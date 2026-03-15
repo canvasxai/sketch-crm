@@ -79,11 +79,58 @@ export function TimelineItem({ entry, contactName }: TimelineItemProps) {
       }
       case "meeting": {
         const meeting = entry.data as Meeting;
+        const rawMeeting = entry.data as unknown as Record<string, unknown>;
+        const aiSummary = (rawMeeting.ai_summary ?? rawMeeting.aiSummary) as string | null;
+        const rawActionItems = rawMeeting.action_items ?? rawMeeting.actionItems;
+        const rawKeywords = rawMeeting.keywords ?? rawMeeting.keywords;
+        const durationMinutes = (rawMeeting.duration_minutes ?? rawMeeting.durationMinutes) as number | null;
+
+        // action_items can be a string (from Fireflies) or string[] — normalize
+        const actionItems: string[] = Array.isArray(rawActionItems)
+          ? rawActionItems
+          : typeof rawActionItems === "string" && rawActionItems.trim()
+            ? rawActionItems.split("\n").filter((l: string) => l.trim())
+            : [];
+
+        // keywords can be a string[] or a string
+        const keywords: string[] = Array.isArray(rawKeywords)
+          ? rawKeywords
+          : typeof rawKeywords === "string" && rawKeywords.trim()
+            ? rawKeywords.split(",").map((k: string) => k.trim()).filter(Boolean)
+            : [];
+
         return (
-          <span className="text-sm text-muted-foreground mt-0.5">
-            {meeting.title ?? "Untitled meeting"}
-            {meeting.startTime && ` \u00B7 ${formatDate(meeting.startTime)}`}
-          </span>
+          <div className="mt-0.5 space-y-1.5">
+            <span className="text-sm text-muted-foreground">
+              {meeting.title ?? "Untitled meeting"}
+              {durationMinutes ? ` \u00B7 ${durationMinutes}min` : null}
+            </span>
+            {aiSummary && (
+              <p className="text-xs text-muted-foreground/80 line-clamp-3">{aiSummary}</p>
+            )}
+            {actionItems.length > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[11px] font-medium text-muted-foreground">Action items</p>
+                <ul className="text-xs text-muted-foreground/80 space-y-0.5 pl-3">
+                  {actionItems.slice(0, 5).map((item, i) => (
+                    <li key={i} className="list-disc">{item}</li>
+                  ))}
+                  {actionItems.length > 5 && (
+                    <li className="list-none text-[11px]">+{actionItems.length - 5} more</li>
+                  )}
+                </ul>
+              </div>
+            )}
+            {keywords.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {keywords.slice(0, 8).map((kw, i) => (
+                  <Badge key={i} variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                    {kw}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
         );
       }
       case "note": {

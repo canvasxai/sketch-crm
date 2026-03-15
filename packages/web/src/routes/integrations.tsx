@@ -7,6 +7,6 @@ export const integrationsRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: "/integrations",
   beforeLoad: () => {
-    throw redirect({ to: "/contacts", search: { search: "", pipeline: "", visibility: "", ownerId: "", page: 1 } });
+    throw redirect({ to: "/directory", search: { tab: "contacts", search: "", category: "", visibility: "", ownerId: "", page: 1, open: "" } });
   },
 });

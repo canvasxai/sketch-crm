@@ -47,7 +47,7 @@ export const LINKEDIN_MESSAGE_SOURCES = ["aimfox", "csv", "manual"] as const;
 export type LinkedinMessageSource = (typeof LINKEDIN_MESSAGE_SOURCES)[number];
 
 // ── Meeting sources ──
-export const MEETING_SOURCES = ["google_calendar", "manual", "csv"] as const;
+export const MEETING_SOURCES = ["google_calendar", "fireflies", "manual", "csv"] as const;
 export type MeetingSource = (typeof MEETING_SOURCES)[number];
 
 // ── User roles ──
@@ -246,6 +246,11 @@ export interface Meeting {
   attendees: string | null;
   notes: string | null;
   calendarEventId: string | null;
+  firefliesTranscriptId: string | null;
+  aiSummary: string | null;
+  actionItems: string[] | null;
+  keywords: string[] | null;
+  durationMinutes: number | null;
   source: string;
   createdAt: string;
   updatedAt: string;

@@ -1,12 +1,9 @@
 import {
-  COMPANY_PIPELINES,
-  type CompanyPipeline,
-  CONTACT_PIPELINES,
-  CONTACT_SOURCES,
-  CONTACT_VISIBILITIES,
+  COMPANY_CATEGORIES,
+  type CompanyCategory,
+  CONTACT_CATEGORIES,
   type Contact,
-  type ContactSource,
-  type ContactPipeline,
+  type ContactCategory,
   type ContactVisibility,
   isPersonalEmailDomain,
 } from "@crm/shared";
@@ -20,6 +17,7 @@ import {
   Check,
   CheckSquare,
   Clock,
+  Crown,
   DotsThree,
   EnvelopeSimple,
   Eye,
@@ -39,27 +37,16 @@ import {
   SpinnerGap,
   Storefront,
   Trash,
-  UploadSimple,
   Users,
   VideoCamera,
   X,
 } from "@phosphor-icons/react";
-import { createRoute, useNavigate } from "@tanstack/react-router";
-/**
- * Contacts page — unified contact management.
- *
- * Layout (top to bottom):
- * 1. Header — title + stats + "Import CSV" + "Add Contact" buttons
- * 2. Toolbar — search + stage/visibility/owner filter dropdowns + batch actions
- * 3. Contact table — multi-select, badges, detail sheet
- */
+import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DOMPurify from "dompurify";
-import { EmptyState } from "@/components/empty-state";
 import { PipelineSelector } from "@/components/pipeline-selector";
-import { WorkflowStatusIcon } from "@/components/workflow-status-icon";
-import { MultiFilterPopover } from "@/components/multi-filter-popover";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,34 +70,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetClose, SheetContent } from "@/components/ui/sheet";
+import { SheetClose } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { useCompanies, useUpdateCompany } from "@/hooks/use-companies";
-import {
-  useBatchDeleteContacts,
-  useBatchUpdateContacts,
-  useContactCounts,
-  useContacts,
-  useCreateContact,
-  useDeleteContact,
-  useUpdateContact,
-} from "@/hooks/use-contacts";
-import { ClassificationPopover } from "@/components/classification-popover";
+import { useDeleteContact, useUpdateContact } from "@/hooks/use-contacts";
 import { useCreateNote } from "@/hooks/use-notes";
-import { useDedupContactIds } from "@/hooks/use-dedup-candidates";
 import { useAddMutedDomain } from "@/hooks/use-settings";
 import { useUsers } from "@/hooks/use-users";
 import { useTimeline } from "@/hooks/use-timeline";
-import { ResizableDrawerWrapper } from "@/components/resizable-drawer-wrapper";
 import { useTasks, useCreateTask, useUpdateTask } from "@/hooks/use-tasks";
 import { useCreateMeeting, useCreateEmail } from "@/hooks/use-meetings";
-import { useContactsNextUp, useContactsLastTouched } from "@/hooks/use-insights";
 import { mapTimelineEntry } from "@/lib/timeline-mapper";
 import { timelineEventConfig } from "@/lib/drawer-event-config";
-import { formatRelativeDate, formatTime, groupByDate, drawerPipelineStyle, drawerSourceLabel, drawerChannelLabel } from "@/lib/drawer-helpers";
+import { formatRelativeDate, formatTime, groupByDate, drawerCategoryStyle, drawerSourceLabel, drawerChannelLabel } from "@/lib/drawer-helpers";
 import {
   type DrawerTimelineEventType,
   type DrawerTimelineEvent,
@@ -121,751 +95,57 @@ import {
   TIMELINE_FILTERS,
   filterToTypes,
 } from "@/lib/drawer-types";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { dashboardRoute } from "./dashboard";
-
-// ── Route ──
-
-export const contactsRoute = createRoute({
-  getParentRoute: () => dashboardRoute,
-  path: "/contacts",
-  component: ContactsPage,
-  validateSearch: (search: Record<string, unknown>) => ({
-    search: (search.search as string) || "",
-    pipeline: (search.pipeline as string) || "",
-    visibility: (search.visibility as string) || "",
-    ownerId: (search.ownerId as string) || "",
-    page: Number(search.page) || 1,
-  }),
-});
-
-// ── URL param helpers for multi-select (comma-separated) ──
-
-function parseMulti(raw: string): Set<string> {
-  if (!raw) return new Set();
-  return new Set(raw.split(",").filter(Boolean));
-}
-
-function serializeMulti(set: Set<string>): string {
-  return [...set].join(",");
-}
-
-// ── Helpers ──
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return "\u2014";
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return "\u2014";
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 
 /** Normalize plain-text email bodies for display: strip \r, collapse excessive blank lines. */
 function normalizeBody(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// ── Main component ──
+function FindLinkedinButton({ contactId }: { contactId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "not-found">("idle");
+  const queryClient = useQueryClient();
 
-function ContactsPage() {
-  const navigate = useNavigate({ from: contactsRoute.fullPath });
-  const { search: searchParam, pipeline, visibility, ownerId, page } = contactsRoute.useSearch();
-
-  // ── Multi-select filter state (hydrated from URL params) ──
-  const stageFilters = useMemo(() => parseMulti(pipeline), [pipeline]);
-  const visibilityFilters = useMemo(() => parseMulti(visibility), [visibility]);
-  const ownerFilters = useMemo(() => parseMulti(ownerId), [ownerId]);
-
-  // ── Search state (local for debounce) ──
-  const [searchInput, setSearchInput] = useState(searchParam);
-  const [debouncedSearch, setDebouncedSearch] = useState(searchParam);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(searchInput);
-      navigate({
-        search: (prev) => ({ ...prev, search: searchInput || "", page: 1 }),
-        replace: true,
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchInput, navigate]);
-
-  // ── Company lookup ──
-  const { data: companiesData } = useCompanies({ limit: 500 });
-  const companyMap = useMemo(
-    () => new Map((companiesData?.companies ?? []).map((c) => [c.id, c.name])),
-    [companiesData],
-  );
-  const companies = companiesData?.companies ?? [];
-
-  // ── User lookup (for owner column) ──
-  const { data: usersData } = useUsers();
-  const users = usersData?.users ?? [];
-  const userMap = useMemo(
-    () => new Map(users.map((u) => [u.id, u.name] as [string, string])),
-    [users],
-  );
-
-  // ── Contact counts ──
-  const { data: countsData } = useContactCounts();
-  const totalCount = countsData?.total ?? 0;
-  const sharedCount = countsData?.visibilityCounts?.shared ?? 0;
-
-  // ── Contact query (fetch all, filter client-side for multi-select) ──
-  const { data, isLoading } = useContacts({
-    search: debouncedSearch || undefined,
-    limit: 500,
-  });
-
-  const allContacts = data?.contacts ?? [];
-
-  // ── Client-side multi-select filtering ──
-  const filteredContacts = useMemo(() => {
-    return allContacts.filter((c) => {
-      if (stageFilters.size > 0 && !stageFilters.has(c.pipeline ?? "")) return false;
-      if (visibilityFilters.size > 0 && !visibilityFilters.has(c.visibility)) return false;
-      if (ownerFilters.size > 0) {
-        const ownerIds = (c.owners ?? []).map((o) => o.id);
-        if (ownerIds.length === 0 || !ownerIds.some((id) => ownerFilters.has(id))) return false;
+  async function handleFind() {
+    setState("loading");
+    try {
+      const res = await api.contacts.enrichLinkedin(contactId);
+      if (res.linkedinUrl) {
+        queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      } else {
+        setState("not-found");
       }
-      return true;
-    });
-  }, [allContacts, stageFilters, visibilityFilters, ownerFilters]);
-
-  // ── Client-side pagination ──
-  const limit = 20;
-  const offset = (page - 1) * limit;
-  const total = filteredContacts.length;
-  const contacts = filteredContacts.slice(offset, offset + limit);
-
-  // ── Batch insights for current page ──
-  const contactIds = useMemo(() => contacts.map((c) => c.id), [contacts]);
-  const { data: nextUpData } = useContactsNextUp(contactIds);
-  const { data: lastTouchedData } = useContactsLastTouched(contactIds);
-
-  // ── Dedup awareness ──
-  const { data: dedupContactIds } = useDedupContactIds();
-  const dedupIds = dedupContactIds ?? new Set<string>();
-
-  // ── Selection mode (toggleable) ──
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    setSelected(new Set());
-  }, [data]);
-
-  function toggleSelect(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    if (selected.size === contacts.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(contacts.map((c) => c.id)));
+    } catch {
+      setState("not-found");
     }
   }
 
-  const allSelected = contacts.length > 0 && selected.size === contacts.length;
-  const someSelected = selected.size > 0;
-
-  // ── Batch operations ──
-  const batchUpdateMutation = useBatchUpdateContacts();
-  const batchDeleteMutation = useBatchDeleteContacts();
-
-  function handlePromoteToShared() {
-    batchUpdateMutation.mutate(
-      { ids: [...selected], visibility: "shared" },
-      { onSuccess: () => setSelected(new Set()) },
+  if (state === "not-found") {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <LinkedinLogo size={13} className="shrink-0" />
+        Not found
+      </span>
     );
-  }
-
-  function handleBatchDelete() {
-    batchDeleteMutation.mutate([...selected], {
-      onSuccess: () => setSelected(new Set()),
-    });
-  }
-
-  // ── Detail sheet ──
-  const [detailContact, setDetailContact] = useState<Contact | null>(null);
-
-  // ── Add dialog ──
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [title, setTitle] = useState("");
-  const [linkedinUrl, setLinkedinUrl] = useState("");
-  const [companyId, setCompanyId] = useState("");
-  const [contactSource, setContactSource] = useState("");
-  const [contactPipeline, setContactPipeline] = useState<ContactPipeline | null>(null);
-
-  const createMutation = useCreateContact();
-  const updateContactMutation = useUpdateContact();
-  const updateCompanyMutation = useUpdateCompany();
-  const canSubmit = name.trim() && contactSource;
-
-  // ── Pipeline propagation prompt ──
-  // When a user manually changes a contact's pipeline, ask whether to also update the company
-  const [pipelinePrompt, setPipelinePrompt] = useState<{
-    contactName: string;
-    companyId: string;
-    companyName: string;
-    companyCurrentPipeline: string;
-    newPipeline: string;
-  } | null>(null);
-
-  function handleContactPipelineChange(contact: Contact, newPipeline: string | null) {
-    // Always update the contact first
-    updateContactMutation.mutate({
-      id: contact.id,
-      data: { pipeline: newPipeline as ContactPipeline | null },
-    });
-
-    // If the contact has a company and a pipeline was selected (not cleared),
-    // ask whether to also update the company
-    if (newPipeline && contact.companyId) {
-      const company = companies.find((c) => c.id === contact.companyId);
-      if (company && company.pipeline !== newPipeline) {
-        setPipelinePrompt({
-          contactName: contact.name,
-          companyId: company.id,
-          companyName: company.name,
-          companyCurrentPipeline: company.pipeline,
-          newPipeline,
-        });
-      }
-    }
-  }
-
-  function resetAndClose() {
-    setName("");
-    setEmail("");
-    setPhone("");
-    setTitle("");
-    setLinkedinUrl("");
-    setCompanyId("");
-    setContactSource("");
-    setContactPipeline(null);
-    setShowAddDialog(false);
-  }
-
-  function handleCreate() {
-    if (!canSubmit) return;
-    createMutation.mutate(
-      {
-        name: name.trim(),
-        source: contactSource as ContactSource,
-        pipeline: contactPipeline,
-        ...(email && { email }),
-        ...(phone && { phone }),
-        ...(title && { title }),
-        ...(linkedinUrl && { linkedinUrl }),
-        ...(companyId && { companyId }),
-      },
-      { onSuccess: resetAndClose },
-    );
-  }
-
-  // ── Pagination helpers ──
-  const from = total > 0 ? offset + 1 : 0;
-  const to = Math.min(offset + limit, total);
-  const hasPrev = page > 1;
-  const hasNext = offset + limit < total;
-
-  // ── Filter navigation helpers (multi-select) ──
-  function setStageFilters(next: Set<string>) {
-    navigate({
-      search: (prev) => ({ ...prev, pipeline: serializeMulti(next), page: 1 }),
-      replace: true,
-    });
-  }
-
-  function setVisibilityFiltersNav(next: Set<string>) {
-    navigate({
-      search: (prev) => ({ ...prev, visibility: serializeMulti(next), page: 1 }),
-      replace: true,
-    });
-  }
-
-  function setOwnerFiltersNav(next: Set<string>) {
-    navigate({
-      search: (prev) => ({ ...prev, ownerId: serializeMulti(next), page: 1 }),
-      replace: true,
-    });
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-bold">Contacts</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your CRM contacts — review, filter, and organize.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {totalCount > 0 && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>{totalCount} total</span>
-              {sharedCount > 0 && (
-                <>
-                  <span className="text-border">|</span>
-                  <span>{sharedCount} shared</span>
-                </>
-              )}
-            </div>
-          )}
-          <ClassificationPopover />
-          <Button size="sm" onClick={() => setShowAddDialog(true)}>
-            <Plus size={16} />
-            Add Contact
-          </Button>
-        </div>
-      </div>
-
-      {/* ── Toolbar ── */}
-      <div className="mt-5 flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <MagnifyingGlass size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search contacts..."
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="h-8 pl-8 text-xs"
-          />
-        </div>
-
-        <MultiFilterPopover
-          label="All pipelines"
-          options={COMPANY_PIPELINES.map((s: CompanyPipeline) => ({
-            value: s,
-            label: s.charAt(0).toUpperCase() + s.slice(1),
-          }))}
-          selected={stageFilters}
-          onChange={setStageFilters}
-        />
-
-        <MultiFilterPopover
-          label="All visibility"
-          options={CONTACT_VISIBILITIES.map((v) => ({
-            value: v,
-            label: v.charAt(0).toUpperCase() + v.slice(1),
-          }))}
-          selected={visibilityFilters}
-          onChange={setVisibilityFiltersNav}
-        />
-
-        <MultiFilterPopover
-          label="All owners"
-          options={users.map((u) => ({
-            value: u.id,
-            label: u.name,
-          }))}
-          selected={ownerFilters}
-          onChange={setOwnerFiltersNav}
-        />
-
-        <Button
-          size="sm"
-          variant={selectionMode ? "secondary" : "ghost"}
-          className="h-8 text-xs gap-1 ml-auto"
-          onClick={() => {
-            setSelectionMode((prev) => !prev);
-            setSelected(new Set());
-          }}
-        >
-          <ListChecks size={14} />
-          Select
-        </Button>
-
-        {selectionMode && someSelected && (
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs gap-1"
-              onClick={handlePromoteToShared}
-              disabled={batchUpdateMutation.isPending}
-            >
-              <Eye size={14} />
-              Promote {selected.size} to shared
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs gap-1 text-destructive hover:bg-destructive/10"
-              onClick={handleBatchDelete}
-              disabled={batchDeleteMutation.isPending}
-            >
-              <Trash size={14} />
-              Delete {selected.size}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {/* ── Table ── */}
-      {isLoading ? (
-        <div className="mt-4 space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 rounded-lg" />
-          ))}
-        </div>
-      ) : contacts.length === 0 ? (
-        <div className="mt-4">
-          <EmptyState
-            icon={<Users size={32} />}
-            title="No contacts yet"
-            description="Add your first contact, import from CSV, or connect Gmail to get started."
-            action={
-              <div className="flex gap-2">
-                <Button size="sm" onClick={() => setShowAddDialog(true)}>
-                  <Plus size={16} />
-                  Add Contact
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => navigate({ to: "/import" })}>
-                  <UploadSimple size={16} />
-                  Import Data
-                </Button>
-              </div>
-            }
-          />
-        </div>
+    <button
+      type="button"
+      onClick={handleFind}
+      disabled={state === "loading"}
+      className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+    >
+      {state === "loading" ? (
+        <SpinnerGap size={13} className="shrink-0 animate-spin" />
       ) : (
-        <>
-          <div className="mt-4 rounded-lg border border-border bg-card">
-            {/* Table header */}
-            <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              <div className="w-5">
-                {selectionMode && (
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleSelectAll}
-                    className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                  />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">Name</div>
-              <div className="w-32">Domain</div>
-              <div className="w-24">Pipeline</div>
-              <div className="w-20">Owner</div>
-              <div className="w-44">Next up</div>
-              <div className="w-28">Last touched</div>
-            </div>
-
-            {/* Table rows */}
-            {contacts.map((contact) => {
-              const isSelected = selected.has(contact.id);
-              const subtitle = [contact.title, contact.companyId ? companyMap.get(contact.companyId) : null].filter(Boolean).join(" \u00B7 ");
-              const nextUp = nextUpData?.[contact.id] ?? { type: "none" as const, label: "\u2014" };
-              const lastTouched = lastTouchedData?.[contact.id];
-              const domain = contact.email?.split("@")[1] ?? null;
-
-              return (
-                <div
-                  key={contact.id}
-                  className={cn(
-                    "group flex items-center gap-3 border-b border-border px-4 py-2.5 transition-colors last:border-b-0 cursor-pointer",
-                    selectionMode && isSelected ? "bg-primary/5" : "hover:bg-muted/30",
-                  )}
-                >
-                  <div className="w-5" onClick={(e) => e.stopPropagation()}>
-                    {selectionMode ? (
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelect(contact.id)}
-                        className="size-3.5 rounded border-border accent-primary cursor-pointer"
-                      />
-                    ) : (
-                      <WorkflowStatusIcon
-                        contact={contact}
-                        dedupContactIds={dedupIds}
-                        onClick={(status) => {
-                          if (status === "dedup") {
-                            navigate({ to: "/dedup-review" });
-                          }
-                        }}
-                      />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0" onClick={() => setDetailContact(contact)}>
-                    <div className="text-sm font-medium truncate">{contact.name}</div>
-                    {subtitle && <div className="text-xs text-muted-foreground truncate">{subtitle}</div>}
-                  </div>
-                  <div className="w-32 text-xs text-muted-foreground truncate" onClick={() => setDetailContact(contact)}>
-                    {domain ?? "\u2014"}
-                  </div>
-                  <div className="w-24" onClick={(e) => e.stopPropagation()}>
-                    <PipelineSelector
-                      value={contact.pipeline}
-                      options={CONTACT_PIPELINES}
-                      allowClear
-                      onChange={(p) => handleContactPipelineChange(contact, p)}
-                    />
-                  </div>
-                  <div className="w-20 text-xs text-muted-foreground truncate" onClick={() => setDetailContact(contact)}>
-                    {(contact.owners ?? []).length > 0
-                      ? contact.owners!.map((o) => o.name.split(" ")[0]).join(", ")
-                      : "\u2014"}
-                  </div>
-                  <div className="w-44 truncate" onClick={() => setDetailContact(contact)}>
-                    {nextUp.type === "none" ? (
-                      <span className="text-xs text-muted-foreground">{"\u2014"}</span>
-                    ) : (
-                      <span className={cn(
-                        "inline-flex items-center gap-1 text-xs",
-                        nextUp.isOverdue ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
-                      )}>
-                        {nextUp.type === "meeting" && <span>📅</span>}
-                        {nextUp.type === "task" && <span>✅</span>}
-                        {nextUp.type === "reply_needed" && <span>📧</span>}
-                        <span className="truncate">{nextUp.label}</span>
-                      </span>
-                    )}
-                  </div>
-                  <div className="w-28 text-xs text-muted-foreground" onClick={() => setDetailContact(contact)}>
-                    {lastTouched?.label ?? "\u2014"}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Pagination */}
-          <div className="mt-4 flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              Showing {from}&ndash;{to} of {total}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasPrev}
-                onClick={() =>
-                  navigate({
-                    search: (prev) => ({ ...prev, page: page - 1 }),
-                    replace: true,
-                  })
-                }
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasNext}
-                onClick={() =>
-                  navigate({
-                    search: (prev) => ({ ...prev, page: page + 1 }),
-                    replace: true,
-                  })
-                }
-              >
-                Next
-              </Button>
-            </div>
-          </div>
-        </>
+        <LinkedinLogo size={13} className="shrink-0" />
       )}
-
-      {/* ── Detail Sheet ── */}
-      <Sheet
-        open={!!detailContact}
-        onOpenChange={(open) => {
-          if (!open) setDetailContact(null);
-        }}
-      >
-        <SheetContent className="!w-auto !max-w-none p-0" showCloseButton={false}>
-          {detailContact && (
-            <ResizableDrawerWrapper>
-              <ContactDetailDrawer
-                contact={detailContact}
-                companyName={detailContact.companyId ? (companyMap.get(detailContact.companyId) ?? null) : null}
-                onClose={() => setDetailContact(null)}
-              />
-            </ResizableDrawerWrapper>
-          )}
-        </SheetContent>
-      </Sheet>
-
-      {/* ── Pipeline Propagation Prompt ── */}
-      <Dialog open={!!pipelinePrompt} onOpenChange={(open) => { if (!open) setPipelinePrompt(null); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Update company pipeline?</DialogTitle>
-            <DialogDescription>
-              You changed <strong>{pipelinePrompt?.contactName}</strong>'s pipeline.
-              Should <strong>{pipelinePrompt?.companyName}</strong> and all its contacts also be updated
-              to <strong>{pipelinePrompt?.newPipeline}</strong>?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPipelinePrompt(null)}>
-              No, keep as is
-            </Button>
-            <Button
-              onClick={() => {
-                if (pipelinePrompt) {
-                  updateCompanyMutation.mutate({
-                    id: pipelinePrompt.companyId,
-                    data: {
-                      pipeline: pipelinePrompt.newPipeline as CompanyPipeline,
-                      propagateToContacts: true,
-                    },
-                  });
-                }
-                setPipelinePrompt(null);
-              }}
-            >
-              Yes, update company &amp; contacts
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Add Contact Dialog ── */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Contact</DialogTitle>
-            <DialogDescription>Create a new contact record in your CRM.</DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4 py-2">
-            <div className="grid gap-2">
-              <Label htmlFor="contact-name">Name *</Label>
-              <Input id="contact-name" placeholder="Jane Doe" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="contact-email">Email</Label>
-              <Input
-                id="contact-email"
-                placeholder="jane@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="contact-phone">Phone</Label>
-              <Input
-                id="contact-phone"
-                placeholder="+1 (555) 123-4567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="contact-title">Title</Label>
-              <Input
-                id="contact-title"
-                placeholder="VP of Engineering"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="contact-linkedin">LinkedIn URL</Label>
-              <Input
-                id="contact-linkedin"
-                placeholder="https://linkedin.com/in/janedoe"
-                value={linkedinUrl}
-                onChange={(e) => setLinkedinUrl(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label>Company</Label>
-              <Select value={companyId} onValueChange={setCompanyId}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select company" />
-                </SelectTrigger>
-                <SelectContent>
-                  {companies.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>Source *</Label>
-              <Select value={contactSource} onValueChange={setContactSource}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select source" />
-                </SelectTrigger>
-                <SelectContent>
-                  {CONTACT_SOURCES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>Pipeline</Label>
-              <Select value={contactPipeline ?? ""} onValueChange={(v: string) => setContactPipeline(v === "" ? null : (v as ContactPipeline))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Inherit from company" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">Inherit from company</SelectItem>
-                  {COMPANY_PIPELINES.map((p: CompanyPipeline) => (
-                    <SelectItem key={p} value={p}>
-                      {p.charAt(0).toUpperCase() + p.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" onClick={resetAndClose}>
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button disabled={!canSubmit || createMutation.isPending} onClick={handleCreate}>
-              {createMutation.isPending ? (
-                <>
-                  <SpinnerGap size={16} className="animate-spin" />
-                  Adding...
-                </>
-              ) : (
-                "Add Contact"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-    </div>
+      <span className="text-xs">{state === "loading" ? "Searching..." : "Find LinkedIn"}</span>
+    </button>
   );
 }
-
-
-
-
-/* ─────────────────────────────────────────────────────────
- * ContactDetailDrawer — redesigned single-scroll layout
- * ───────────────────────────────────────────────────────── */
-
-/* ─────────────────────────────────────────────────────────
- * ContactDetailDrawer — redesigned single-scroll layout
- * ───────────────────────────────────────────────────────── */
 
 export function ContactDetailDrawer({
   contact,
@@ -889,7 +169,7 @@ export function ContactDetailDrawer({
   const [editLinkedin, setEditLinkedin] = useState(contact.linkedinUrl ?? "");
 
   // Stage & channel
-  const [currentStage, setCurrentStage] = useState(contact.pipeline ?? "uncategorized");
+  const [currentStage, setCurrentStage] = useState<string>(contact.category ?? "uncategorized");
   const leadChannel = (contact as Contact & { leadChannel?: LeadChannel | null }).leadChannel ?? null;
 
   // Tabs & view stack
@@ -936,7 +216,7 @@ export function ContactDetailDrawer({
   const prevContactId = useRef(contact.id);
   if (contact.id !== prevContactId.current) {
     prevContactId.current = contact.id;
-    setCurrentStage(contact.pipeline ?? "uncategorized");
+    setCurrentStage(contact.category ?? "uncategorized");
     setIsEditing(false);
     setEditName(contact.name);
     setEditTitle(contact.title ?? "");
@@ -1012,11 +292,18 @@ export function ContactDetailDrawer({
 
   // Handlers
 
-  function handlePipelineChange(value: string) {
+  function handleCategoryChange(value: string) {
     setCurrentStage(value);
     updateMutation.mutate({
       id: contact.id,
-      data: { pipeline: (value as ContactPipeline) || null },
+      data: { category: value as ContactCategory },
+    });
+  }
+
+  function toggleDecisionMaker() {
+    updateMutation.mutate({
+      id: contact.id,
+      data: { isDecisionMaker: !contact.isDecisionMaker },
     });
   }
 
@@ -1202,11 +489,13 @@ export function ContactDetailDrawer({
                     />
                   </div>
                 ) : (
-                  contact.linkedinUrl && (
+                  contact.linkedinUrl ? (
                     <a href={contact.linkedinUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors max-w-full">
                       <LinkedinLogo size={13} className="shrink-0" />
-                      <span className="truncate">LinkedIn</span>
+                      <span className="truncate">{contact.linkedinUrl.replace(/\/+$/, "").split("/").pop() || "LinkedIn"}</span>
                     </a>
+                  ) : (
+                    <FindLinkedinButton contactId={contact.id} />
                   )
                 )}
               </div>
@@ -1325,16 +614,16 @@ export function ContactDetailDrawer({
             </div>
           </div>
 
-          {/* Pipeline chip */}
+          {/* Pipeline chip + Decision Maker toggle */}
           {!isEditing && (
-            <div className="mt-3">
+            <div className="mt-3 flex items-center gap-2">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      drawerPipelineStyle((currentStage || "uncategorized") as CompanyPipeline),
+                      drawerCategoryStyle((currentStage || "uncategorized") as CompanyCategory),
                     )}
                   >
                     {(currentStage || "uncategorized").charAt(0).toUpperCase() + (currentStage || "uncategorized").slice(1)}
@@ -1342,10 +631,10 @@ export function ContactDetailDrawer({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="min-w-[120px]">
-                  {COMPANY_PIPELINES.map((p: CompanyPipeline) => (
+                  {COMPANY_CATEGORIES.map((p: CompanyCategory) => (
                     <DropdownMenuItem
                       key={p}
-                      onClick={() => handlePipelineChange(p)}
+                      onClick={() => handleCategoryChange(p)}
                       className={currentStage === p ? "bg-accent" : ""}
                     >
                       {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -1353,6 +642,20 @@ export function ContactDetailDrawer({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <button
+                type="button"
+                onClick={toggleDecisionMaker}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
+                  contact.isDecisionMaker
+                    ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80",
+                )}
+                title={contact.isDecisionMaker ? "Remove Decision Maker" : "Mark as Decision Maker"}
+              >
+                <Crown size={11} weight={contact.isDecisionMaker ? "fill" : "regular"} />
+                DM
+              </button>
             </div>
           )}
         </div>
@@ -1779,9 +1082,32 @@ export function ContactDetailDrawer({
                                           <p className="mt-0.5 text-xs text-muted-foreground">Source: {event.source}</p>
                                         )}
                                         {(event.type === "meeting" || event.type === "calendar_event") && (
-                                          <p className="mt-0.5 text-xs text-muted-foreground">
-                                            {[event.duration, event.location].filter(Boolean).join(" \u00B7 ")}
-                                          </p>
+                                          <>
+                                            {(event.durationMinutes || event.location) && (
+                                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                                {[event.durationMinutes ? `${event.durationMinutes}min` : null, event.location].filter(Boolean).join(" \u00B7 ")}
+                                              </p>
+                                            )}
+                                            {isExpanded && event.actionItems && event.actionItems.length > 0 && (
+                                              <div className="mt-1.5 space-y-0.5">
+                                                <p className="text-[11px] font-medium text-muted-foreground">Action items</p>
+                                                <ul className="text-xs text-muted-foreground/80 space-y-0.5 pl-3">
+                                                  {event.actionItems.map((item, idx) => (
+                                                    <li key={idx} className="list-disc" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(item.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")) }} />
+                                                  ))}
+                                                </ul>
+                                              </div>
+                                            )}
+                                            {isExpanded && event.keywords && event.keywords.length > 0 && (
+                                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                                {event.keywords.map((kw, idx) => (
+                                                  <Badge key={idx} variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                                                    {kw}
+                                                  </Badge>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </>
                                         )}
                                         {event.direction && (
                                           <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 font-normal">
