@@ -151,6 +151,13 @@ export function createUsersRepository(db: Kysely<DB>) {
           .executeTakeFirstOrThrow();
       }
 
+      // First user becomes admin
+      const userCount = await db
+        .selectFrom("users")
+        .select(db.fn.countAll().as("count"))
+        .executeTakeFirstOrThrow();
+      const isFirstUser = Number(userCount.count) === 0;
+
       // Create new user
       return db
         .insertInto("users")
@@ -159,6 +166,7 @@ export function createUsersRepository(db: Kysely<DB>) {
           email: data.email,
           google_id: data.googleId,
           avatar_url: data.avatarUrl ?? null,
+          ...(isFirstUser ? { role: "admin" } : {}),
         })
         .returningAll()
         .executeTakeFirstOrThrow();

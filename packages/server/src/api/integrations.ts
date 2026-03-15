@@ -503,6 +503,9 @@ export function integrationsRoutes(deps: IntegrationDeps) {
       );
     }
 
+    const userEmail = await getUserEmail(c, deps.config);
+    const syncUser = userEmail ? await deps.users.findByEmail(userEmail) : null;
+
     const body = await c.req.json<{ after?: string; before?: string }>().catch(() => ({} as { after?: string; before?: string }));
 
     if (!body.after || !body.before) {
@@ -532,6 +535,7 @@ export function integrationsRoutes(deps: IntegrationDeps) {
         config: deps.config,
       },
       { after: body.after, before: body.before },
+      { createdByUserId: syncUser?.id },
     ).catch((err) => {
       console.error("[fireflies] Sync failed:", err);
     });

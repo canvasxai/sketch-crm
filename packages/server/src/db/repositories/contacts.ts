@@ -77,6 +77,14 @@ export function createContactsRepository(db: Kysely<DB>) {
           eb("contacts.created_by_user_id", "is", null),
         ]),
       );
+    } else {
+      // No authenticated user — only show shared + unowned contacts
+      query = query.where((eb: any) =>
+        eb.or([
+          eb("contacts.visibility", "=", "shared"),
+          eb("contacts.created_by_user_id", "is", null),
+        ]),
+      );
     }
 
     return query;

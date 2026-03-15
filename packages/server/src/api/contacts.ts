@@ -300,10 +300,14 @@ export function contactsRoutes(
       currentUserId: currentUserId ?? undefined,
     };
 
+    console.log(`[contacts] GET / currentUserId=${currentUserId}, visibility filter active=${!!currentUserId}`);
+
     const [contacts, total] = await Promise.all([
       repo.list(filters),
       repo.count(filters),
     ]);
+
+    console.log(`[contacts] Returned ${contacts.length} of ${total} contacts`);
 
     // Batch-fetch owners for all contacts in this page
     const contactIds = contacts.map((ct) => ct.id);

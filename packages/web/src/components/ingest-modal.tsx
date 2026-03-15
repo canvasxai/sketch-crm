@@ -55,6 +55,7 @@ import {
   useDismissCandidate,
 } from "@/hooks/use-dedup-candidates";
 import { useUploadCsv } from "@/hooks/use-ingestion";
+import { useSession } from "@/hooks/use-auth";
 import {
   useAimfoxBackfill,
   useCancelAimfoxBackfill,
@@ -301,6 +302,8 @@ const SOURCE_CARDS: Array<{
 
 function IngestSourceSelect({ dispatch }: { dispatch: React.Dispatch<IngestAction> }) {
   const { data: sourceStatus } = useSourceStatus();
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "admin";
 
   return (
     <div className="grid grid-cols-2 gap-3 py-2 sm:grid-cols-3">
@@ -309,7 +312,8 @@ function IngestSourceSelect({ dispatch }: { dispatch: React.Dispatch<IngestActio
           (card.id === "linkedin" && sourceStatus?.linkedin.status === "syncing") ||
           (card.id === "gmail" && sourceStatus?.gmail.status === "syncing") ||
           (card.id === "firefly" && sourceStatus?.fireflies?.status === "syncing");
-        const disabled = card.comingSoon || isSyncing;
+        const adminOnly = card.id === "linkedin" || card.id === "firefly";
+        const disabled = card.comingSoon || isSyncing || (adminOnly && !isAdmin);
 
         return (
           <button
@@ -329,6 +333,11 @@ function IngestSourceSelect({ dispatch }: { dispatch: React.Dispatch<IngestActio
             {card.comingSoon && (
               <Badge variant="secondary" className="absolute top-2 right-2 text-[10px]">
                 Soon
+              </Badge>
+            )}
+            {adminOnly && !isAdmin && (
+              <Badge variant="secondary" className="absolute top-2 right-2 text-[10px]">
+                Admin
               </Badge>
             )}
             {isSyncing && (

@@ -51,6 +51,7 @@ export function cancelFirefliesSync(): boolean {
 export async function syncFirefliesTranscripts(
   deps: FirefliesSyncDeps,
   dateRange: SyncDateRange,
+  opts?: { createdByUserId?: string },
 ): Promise<SyncResult> {
   const apiKey = deps.config.FIREFLIES_API_KEY;
   if (!apiKey) {
@@ -129,6 +130,7 @@ export async function syncFirefliesTranscripts(
               nameFromEmail(email),
               "fireflies",
               { contacts: deps.contacts, companies: deps.companies },
+              { createdByUserId: opts?.createdByUserId },
             );
             if (match.created) result.contactsCreated++;
             if (match.companyCreated) result.companiesCreated++;
